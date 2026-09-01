@@ -1,0 +1,46 @@
+name: DK LOCK V2 Core Release Gate Fix 1
+
+on:
+  push:
+    branches: [ "v2-core-fix1" ]
+  workflow_dispatch:
+
+jobs:
+  v2-release-gate:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Verify and extract V2 source
+        shell: pwsh
+        run: |
+          $expected = 'bf138cb37da5f1700ef7af3791144755cb3a552b28bb6be001b2086db844d0eb'
+          $actual = (Get-FileHash 'ci/v2src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "V2 source SHA256: $actual"
+          if ($actual -ne $expected) { throw 'V2 source archive SHA256 mismatch.' }
+          New-Item -ItemType Directory -Path 'ci-work' -Force | Out-Null
+          tar -xf 'ci/v2src.tar.xz' -C 'ci-work'
+      - name: Run complete V2 release gate
+        shell: pwsh
+        working-directory: ci-work
+        run: ./scripts/test-v2.ps1
+      - name: Upload V2 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-runtime-evidence-fix1
+          path: |
+            ci-work/report/runtime/V2_WPF_SMOKE_ONLINE.txt
+            ci-work/report/runtime/V2_WPF_SMOKE_ONLINE.png
+            ci-work/report/runtime/V2_WPF_SMOKE_OFFLINE.txt
+            ci-work/report/runtime/V2_WPF_SMOKE_OFFLINE.png
+          if-no-files-found: warn
+          retention-days: 14
