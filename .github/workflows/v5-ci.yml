@@ -1,0 +1,101 @@
+name: DK LOCK V5 Account Vault Release Gate
+
+on:
+  push:
+    branches: [ "v5-account-vault" ]
+  workflow_dispatch:
+
+jobs:
+  v5-release-gate:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rehydrate locked V4 baseline
+        shell: pwsh
+        run: |
+          $v3 = Get-ChildItem 'ci/v3src.part*' | Sort-Object Name
+          if ($v3.Count -ne 12) { throw "Expected 12 V3 parts, found $($v3.Count)." }
+          $b64 = ($v3 | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v3src.tar.xz', [Convert]::FromBase64String($b64))
+          $actual = (Get-FileHash 'v3src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '905b7dec760f149f8f8e91fd6db5dd17abd3cc78ab95920cded5ee844cab2a9e') { throw "V3 SHA mismatch: $actual" }
+          New-Item -ItemType Directory -Path 'ci-extract' -Force | Out-Null
+          tar -xf 'v3src.tar.xz' -C 'ci-extract'
+          Copy-Item 'ci/test-v3-fixed.ps1' 'ci-extract/DK_LOCK_V3/scripts/test-v3.ps1' -Force
+          Copy-Item -Path 'ci/overrides/*' -Destination 'ci-extract/DK_LOCK_V3' -Recurse -Force
+          Move-Item 'ci-extract/DK_LOCK_V3' 'ci-extract/DK_LOCK_V4'
+
+          $v4 = Get-ChildItem 'ci/v4delta.part*' | Sort-Object Name
+          if ($v4.Count -ne 7) { throw "Expected 7 V4 delta parts, found $($v4.Count)." }
+          $b64 = ($v4 | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v4delta.tar.xz', [Convert]::FromBase64String($b64))
+          $actual = (Get-FileHash 'v4delta.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'd44e61b34ce7e0180ba0bfbc7fd7d90d838b401b127116ad9d93d00fb5caba29') { throw "V4 SHA mismatch: $actual" }
+          tar -xf 'v4delta.tar.xz' -C 'ci-extract/DK_LOCK_V4'
+          if (Test-Path 'ci/v4-overrides') { Copy-Item -Path 'ci/v4-overrides/*' -Destination 'ci-extract/DK_LOCK_V4' -Recurse -Force }
+          if (-not (Test-Path 'ci-extract/DK_LOCK_V4/DKLock.sln')) { throw 'V4 baseline reconstruction failed.' }
+
+      - name: Apply locked V5 candidate delta
+        shell: pwsh
+        run: |
+          Move-Item 'ci-extract/DK_LOCK_V4' 'ci-extract/DK_LOCK_V5'
+          $v5 = Get-ChildItem 'ci/v5delta.part*' | Sort-Object Name
+          if ($v5.Count -ne 5) { throw "Expected 5 V5 delta parts, found $($v5.Count)." }
+          $b64 = ($v5 | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v5delta.tar.xz', [Convert]::FromBase64String($b64))
+          $actual = (Get-FileHash 'v5delta.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "V5 delta SHA256: $actual"
+          if ($actual -ne '1f4ebeaf90c88b9d2051563297817324d4318cd7ecce36f91c4e787454c952f6') { throw "V5 SHA mismatch: $actual" }
+          tar -xf 'v5delta.tar.xz' -C 'ci-extract/DK_LOCK_V5'
+          if (-not (Test-Path 'ci-extract/DK_LOCK_V5/DKLock.sln')) { throw 'V5 candidate reconstruction failed.' }
+
+      - name: Run all 19 V5 release gates
+        shell: pwsh
+        working-directory: ci-extract/DK_LOCK_V5
+        run: ./scripts/test-v5.ps1
+
+      - name: Upload V5 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-runtime-evidence
+          path: |
+            ci-extract/DK_LOCK_V5/report/runtime/*.txt
+            ci-extract/DK_LOCK_V5/report/runtime/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload tested Preview Portable
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-preview-portable
+          path: ci-extract/DK_LOCK_V5/artifacts/DK_LOCK_V5_PREVIEW_PORTABLE
+          retention-days: 14
+
+      - name: Clean tested source candidate
+        if: success()
+        shell: pwsh
+        run: |
+          if (Test-Path 'ci-extract/DK_LOCK_V5/artifacts') { Remove-Item 'ci-extract/DK_LOCK_V5/artifacts' -Recurse -Force }
+          Get-ChildItem 'ci-extract/DK_LOCK_V5' -Directory -Recurse | Where-Object { $_.Name -in @('bin','obj') } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force
+
+      - name: Upload clean tested V5 candidate
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-tested-candidate
+          path: ci-extract/DK_LOCK_V5
+          retention-days: 14
