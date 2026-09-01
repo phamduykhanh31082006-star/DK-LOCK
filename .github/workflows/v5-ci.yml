@@ -59,6 +59,12 @@ jobs:
           Write-Host "V5 delta SHA256: $actual"
           if ($actual -ne '1f4ebeaf90c88b9d2051563297817324d4318cd7ecce36f91c4e787454c952f6') { throw "V5 SHA mismatch: $actual" }
           tar -xf 'v5delta.tar.xz' -C 'ci-extract/DK_LOCK_V5'
+          $accountCoordinator = 'ci-extract/DK_LOCK_V5/src/DKLock.Service/Accounts/AccountVaultCoordinator.cs'
+          $content = Get-Content $accountCoordinator -Raw
+          if ($content -notmatch 'using DKLock\.Core\.Contracts;') {
+            $content = $content -replace 'using DKLock\.Core\.Authentication;\r?\n', "using DKLock.Core.Authentication;`r`nusing DKLock.Core.Contracts;`r`n"
+            Set-Content -Path $accountCoordinator -Value $content -Encoding utf8
+          }
           if (-not (Test-Path 'ci-extract/DK_LOCK_V5/DKLock.sln')) { throw 'V5 candidate reconstruction failed.' }
 
       - name: Run all 19 V5 release gates
