@@ -59,12 +59,31 @@ jobs:
           Write-Host "V5 delta SHA256: $actual"
           if ($actual -ne '1f4ebeaf90c88b9d2051563297817324d4318cd7ecce36f91c4e787454c952f6') { throw "V5 SHA mismatch: $actual" }
           tar -xf 'v5delta.tar.xz' -C 'ci-extract/DK_LOCK_V5'
+
           $accountCoordinator = 'ci-extract/DK_LOCK_V5/src/DKLock.Service/Accounts/AccountVaultCoordinator.cs'
           $content = Get-Content $accountCoordinator -Raw
           if ($content -notmatch 'using DKLock\.Core\.Contracts;') {
             $content = $content -replace 'using DKLock\.Core\.Authentication;\r?\n', "using DKLock.Core.Authentication;`r`nusing DKLock.Core.Contracts;`r`n"
             Set-Content -Path $accountCoordinator -Value $content -Encoding utf8
           }
+
+          $integration = 'ci-extract/DK_LOCK_V5/tests/DKLock.V5.IntegrationTests/Program.cs'
+          $content = Get-Content $integration -Raw
+          $old = 'foreach \(var path in new\[\] \{ dbPath, dbPath \+ "-wal" \}\.Where\(File\.Exists\)\) bytes\.AddRange\(await File\.ReadAllBytesAsync\(path\)\);'
+          if ($content -match $old) {
+            $replacement = @'
+foreach (var path in new[] { dbPath, dbPath + "-wal" }.Where(File.Exists))
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, useAsync: true);
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer);
+        bytes.AddRange(buffer.ToArray());
+    }
+'@
+            $content = $content -replace $old, $replacement.TrimEnd()
+            Set-Content -Path $integration -Value $content -Encoding utf8
+          }
+
           if (-not (Test-Path 'ci-extract/DK_LOCK_V5/DKLock.sln')) { throw 'V5 candidate reconstruction failed.' }
 
       - name: Run all 19 V5 release gates
