@@ -1,0 +1,76 @@
+name: DK LOCK V1 Windows Release Gate Fixed
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  v1-release-gate-fixed:
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rehydrate and patch verified V1 source snapshot
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem -Path 'ci/v1src.xz.part*' | Sort-Object Name
+          if ($parts.Count -ne 5) { throw "Expected 5 V1 source parts, found $($parts.Count)." }
+          $base64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [System.IO.File]::WriteAllBytes('v1src.tar.xz', [Convert]::FromBase64String($base64))
+          $expected = '1f18a8a95eb36a428e27dc35c8b97a98bfec9decb8224792fec5c414efee52dd'
+          $actual = (Get-FileHash 'v1src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "V1 source SHA256: $actual"
+          if ($actual -ne $expected) { throw "V1 source archive SHA256 mismatch." }
+          New-Item -ItemType Directory -Path 'ci-work' -Force | Out-Null
+          tar -xf 'v1src.tar.xz' -C 'ci-work'
+
+          $gatePath = 'ci-work/scripts/test-v1.ps1'
+          $gate = Get-Content $gatePath -Raw
+          $gate = $gate.Replace('$ErrorActionPreference = "Stop"', '$ErrorActionPreference = "Stop"' + [Environment]::NewLine + '$env:PYTHONUTF8 = "1"')
+          $gate = $gate.Replace('& $app --smoke-test' + [Environment]::NewLine + 'if ($LASTEXITCODE -ne 0) { throw "WPF smoke test failed with exit code $LASTEXITCODE" }', '$smokeProcess = Start-Process -FilePath $app -ArgumentList "--smoke-test" -Wait -PassThru' + [Environment]::NewLine + 'if ($smokeProcess.ExitCode -ne 0) { throw "WPF smoke test failed with exit code $($smokeProcess.ExitCode)" }')
+          Set-Content -Path $gatePath -Value $gate -Encoding utf8
+
+          $capabilityFiles = @(
+            @{ Path='ci-work/src/DKLock.Security/V1SecurityCapability.cs'; Old='public const bool EnforcementAvailable = false;'; New='public static bool EnforcementAvailable => false;' },
+            @{ Path='ci-work/src/DKLock.Data/V1PersistenceCapability.cs'; Old='public const bool PersistenceAvailable = false;'; New='public static bool PersistenceAvailable => false;' },
+            @{ Path='ci-work/src/DKLock.Infrastructure/V1InfrastructureCapability.cs'; Old='public const bool IpcAvailable = false;'; New='public static bool IpcAvailable => false;' },
+            @{ Path='ci-work/src/DKLock.Service/V1ServiceCapability.cs'; Old='public const bool BackgroundServiceAvailable = false;'; New='public static bool BackgroundServiceAvailable => false;' }
+          )
+          foreach ($item in $capabilityFiles) {
+            $text = Get-Content $item.Path -Raw
+            Set-Content -Path $item.Path -Value ($text.Replace($item.Old, $item.New)) -Encoding utf8
+          }
+
+      - name: Run complete V1 release gate
+        shell: pwsh
+        working-directory: ci-work
+        run: ./scripts/test-v1.ps1
+
+      - name: Upload V1 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1-runtime-evidence-fixed
+          path: |
+            ci-work/report/runtime/V1_WPF_SMOKE.txt
+            ci-work/report/runtime/V1_WPF_SMOKE.png
+          if-no-files-found: warn
+          retention-days: 14
