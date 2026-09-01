@@ -1,0 +1,79 @@
+name: DK LOCK V3 Application Protection Release Gate
+
+on:
+  push:
+    branches: [ "v3-application-protection" ]
+  workflow_dispatch:
+
+jobs:
+  v3-release-gate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rehydrate exact V3 candidate snapshot
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem 'ci/v3src.part*' | Sort-Object Name
+          if ($parts.Count -ne 12) { throw "Expected 12 V3 snapshot parts, found $($parts.Count)." }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v3src.tar.xz', [Convert]::FromBase64String($b64))
+          $expected = '905b7dec760f149f8f8e91fd6db5dd17abd3cc78ab95920cded5ee844cab2a9e'
+          $actual = (Get-FileHash 'v3src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "V3 candidate SHA256: $actual"
+          if ($actual -ne $expected) { throw 'V3 source archive SHA256 mismatch.' }
+          New-Item -ItemType Directory -Path 'ci-extract' -Force | Out-Null
+          tar -xf 'v3src.tar.xz' -C 'ci-extract'
+          if (-not (Test-Path 'ci-extract/DK_LOCK_V3/DKLock.sln')) { throw 'V3 candidate extraction failed.' }
+
+      - name: Apply reviewed release-gate script correction
+        shell: pwsh
+        run: |
+          Copy-Item 'ci/test-v3-fixed.ps1' 'ci-extract/DK_LOCK_V3/scripts/test-v3.ps1' -Force
+
+      - name: Run all 15 V3 release gates
+        shell: pwsh
+        working-directory: ci-extract/DK_LOCK_V3
+        run: ./scripts/test-v3.ps1
+
+      - name: Upload V3 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v3-runtime-evidence
+          path: |
+            ci-extract/DK_LOCK_V3/report/runtime/V3_WPF_SMOKE_ONLINE.txt
+            ci-extract/DK_LOCK_V3/report/runtime/V3_WPF_SMOKE_ONLINE.png
+            ci-extract/DK_LOCK_V3/report/runtime/V3_WPF_SMOKE_OFFLINE.txt
+            ci-extract/DK_LOCK_V3/report/runtime/V3_WPF_SMOKE_OFFLINE.png
+            ci-extract/DK_LOCK_V3/report/runtime/V3_APPLICATIONS_UI.txt
+            ci-extract/DK_LOCK_V3/report/runtime/V3_APPLICATIONS_UI.png
+            ci-extract/DK_LOCK_V3/report/runtime/V3_UNLOCK_UI.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload gate logs and tested source on success
+        if: success()
+        shell: pwsh
+        run: |
+          Get-ChildItem 'ci-extract/DK_LOCK_V3' -Directory -Recurse | Where-Object { $_.Name -in @('bin','obj') } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force
+          Remove-Item 'ci-extract/DK_LOCK_V3/report/runtime/V1_WPF_SMOKE.png' -ErrorAction SilentlyContinue
+
+      - name: Upload clean tested candidate
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v3-tested-candidate
+          path: ci-extract/DK_LOCK_V3
+          retention-days: 14
