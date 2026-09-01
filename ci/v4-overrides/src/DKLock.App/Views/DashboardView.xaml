@@ -29,8 +29,12 @@
         </UniformGrid>
         <Border Style="{StaticResource CardBorder}" Margin="0,18,0,0">
             <Grid>
-                <StackPanel><TextBlock Text="Quick Lock" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Quick Lock remains reserved for V6. V4 provides scoped application and folder unlock sessions without claiming the V6 global lock workflow." Style="{StaticResource SecondaryText}" Margin="0,6,0,0"/></StackPanel>
-                <Button Content="LOCK NOW" Style="{StaticResource PrimaryButton}" IsEnabled="False" HorizontalAlignment="Right" VerticalAlignment="Center" ToolTip="Available in V6"/>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="0,0,20,0">
+                    <TextBlock Text="Quick Lock" FontSize="18" FontWeight="SemiBold"/>
+                    <TextBlock Text="Quick Lock remains reserved for V6. V4 provides scoped application and folder unlock sessions without claiming the V6 global lock workflow." Style="{StaticResource SecondaryText}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button Grid.Column="1" Content="LOCK NOW" Style="{StaticResource PrimaryButton}" IsEnabled="False" HorizontalAlignment="Right" VerticalAlignment="Center" ToolTip="Available in V6"/>
             </Grid>
         </Border>
     </StackPanel>
