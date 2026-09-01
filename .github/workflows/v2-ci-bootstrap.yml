@@ -25,9 +25,18 @@ jobs:
       - name: Rehydrate verified V2 source snapshot
         shell: pwsh
         run: |
-          $parts = Get-ChildItem 'ci/v2lean.part*' | Sort-Object Name
-          if ($parts.Count -ne 6) { throw "Expected 6 V2 source parts, found $($parts.Count)." }
-          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          $partNames = @(
+            'ci/v2lean.part00',
+            'ci/v2lean.part01',
+            'ci/v2lean.part02a',
+            'ci/v2lean.part02b',
+            'ci/v2lean.part02c',
+            'ci/v2lean.part03',
+            'ci/v2lean.part04',
+            'ci/v2lean.part05'
+          )
+          foreach ($name in $partNames) { if (-not (Test-Path $name)) { throw "Missing V2 source part: $name" } }
+          $b64 = ($partNames | ForEach-Object { (Get-Content $_ -Raw).Trim() }) -join ''
           [IO.File]::WriteAllBytes('v2src.tar.xz', [Convert]::FromBase64String($b64))
           $expected = '378968e29cf39eaa2c37cd5b2d2c25ed1c202eaff3526e3efd2ee080335ed0fd'
           $actual = (Get-FileHash 'v2src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
