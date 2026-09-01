@@ -1,0 +1,36 @@
+<Window x:Class="DKLock.App.Dialogs.UnlockWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DK LOCK — Unlock application" Width="500" Height="470" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Style="{StaticResource DialogWindow}" Topmost="True">
+    <Grid Margin="28">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock Text="Application locked" FontSize="26" FontWeight="SemiBold"/>
+        <TextBlock x:Name="AppName" Grid.Row="1" Margin="0,8,0,0" FontSize="18" FontWeight="SemiBold"/>
+        <TextBlock x:Name="AppPath" Grid.Row="2" Margin="0,4,0,18" Style="{StaticResource SecondaryText}"/>
+        <StackPanel Grid.Row="3">
+            <TextBlock Text="Credential" Margin="0,0,0,6"/>
+            <ComboBox x:Name="CredentialBox" Height="38" SelectedIndex="0" Style="{StaticResource SecureComboBox}">
+                <ComboBoxItem Content="Master password" Tag="MasterPassword" Style="{StaticResource SecureComboBoxItem}"/>
+                <ComboBoxItem x:Name="PinItem" Content="PIN" Tag="Pin" Style="{StaticResource SecureComboBoxItem}"/>
+            </ComboBox>
+        </StackPanel>
+        <StackPanel Grid.Row="4" Margin="0,14,0,0">
+            <TextBlock Text="Password or PIN" Margin="0,0,0,6"/>
+            <PasswordBox x:Name="SecretBox" Height="38" Style="{StaticResource SecurePasswordBox}"/>
+        </StackPanel>
+        <StackPanel Grid.Row="5" Margin="0,14,0,0">
+            <TextBlock Text="Unlock scope" Margin="0,0,0,6"/>
+            <ComboBox x:Name="ScopeBox" Height="38" SelectedIndex="0" Style="{StaticResource SecureComboBox}">
+                <ComboBoxItem Content="Once" Tag="Once" Style="{StaticResource SecureComboBoxItem}"/>
+                <ComboBoxItem Content="5 minutes" Tag="FiveMinutes" Style="{StaticResource SecureComboBoxItem}"/>
+                <ComboBoxItem Content="15 minutes" Tag="FifteenMinutes" Style="{StaticResource SecureComboBoxItem}"/>
+                <ComboBoxItem Content="Until DK LOCK service restarts" Tag="UntilServiceRestart" Style="{StaticResource SecureComboBoxItem}"/>
+            </ComboBox>
+            <TextBlock x:Name="ErrorText" Foreground="{StaticResource Brush.Error}" Margin="0,10,0,0"/>
+        </StackPanel>
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Keep locked" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="Cancel_Click"/>
+            <Button Content="Unlock" Style="{StaticResource PrimaryButton}" Click="Unlock_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>
