@@ -1,0 +1,57 @@
+name: DK LOCK V1 Windows Gate Fix 6
+
+on:
+  push:
+    branches:
+      - v1-ci-fix6
+
+permissions:
+  contents: read
+
+jobs:
+  v1-gate:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    env:
+      PYTHONUTF8: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rehydrate verified V1 source
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem 'ci/v1src.xz.part*' | Sort-Object Name
+          if ($parts.Count -ne 5) { throw "Expected 5 source parts." }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v1src.tar.xz', [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash 'v1src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '1f18a8a95eb36a428e27dc35c8b97a98bfec9decb8224792fec5c414efee52dd') { throw "Source hash mismatch: $hash" }
+          New-Item -ItemType Directory ci-work -Force | Out-Null
+          tar -xf v1src.tar.xz -C ci-work
+
+      - name: Apply final reviewed corrections
+        shell: pwsh
+        run: ./ci/apply-v1-final-fixes.ps1
+
+      - name: Run complete V1 release gate
+        shell: pwsh
+        working-directory: ci-work
+        run: ./scripts/test-v1.ps1
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1-runtime-evidence-fix6
+          path: |
+            ci-work/report/runtime/V1_WPF_SMOKE.txt
+            ci-work/report/runtime/V1_WPF_SMOKE.png
+          if-no-files-found: warn
+          retention-days: 14
