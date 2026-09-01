@@ -44,7 +44,7 @@
                 </StackPanel>
                 <Border DockPanel.Dock="Bottom" Style="{StaticResource CardBorder}" Padding="12" Margin="0,14,0,0">
                     <StackPanel>
-                        <TextBlock Text="V4 PROTECTION CAPABILITIES" FontWeight="SemiBold" FontSize="11"/>
+                        <TextBlock Text="V4 CONTENT PROTECTION" FontWeight="SemiBold" FontSize="11"/>
                         <TextBlock Text="Application enforcement and encrypted local content protection require the DK LOCK core service to be online." Style="{StaticResource SecondaryText}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
                 </Border>
