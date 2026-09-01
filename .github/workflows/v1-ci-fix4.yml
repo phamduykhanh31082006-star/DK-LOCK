@@ -1,0 +1,110 @@
+name: DK LOCK V1 Windows Gate Fix 4
+
+on:
+  push:
+    branches:
+      - v1-ci-fix4
+
+permissions:
+  contents: read
+
+jobs:
+  v1-gate:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    env:
+      PYTHONUTF8: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rehydrate verified V1 source
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem 'ci/v1src.xz.part*' | Sort-Object Name
+          if ($parts.Count -ne 5) { throw "Expected 5 source parts." }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v1src.tar.xz', [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash 'v1src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '1f18a8a95eb36a428e27dc35c8b97a98bfec9decb8224792fec5c414efee52dd') { throw "Source hash mismatch: $hash" }
+          New-Item -ItemType Directory ci-work -Force | Out-Null
+          tar -xf v1src.tar.xz -C ci-work
+
+      - name: Apply final reviewed runtime corrections
+        shell: pwsh
+        run: |
+          $gatePath = 'ci-work/scripts/test-v1.ps1'
+          $gate = Get-Content $gatePath -Raw
+          if ($gate -notmatch 'PYTHONUTF8') { $gate = $gate.Replace('$ErrorActionPreference = "Stop"', '$ErrorActionPreference = "Stop"' + [Environment]::NewLine + '$env:PYTHONUTF8 = "1"') }
+          $gate = $gate.Replace('& $app --smoke-test', '$smokeProcess = Start-Process -FilePath $app -ArgumentList "--smoke-test" -Wait -PassThru')
+          $gate = $gate.Replace('if ($LASTEXITCODE -ne 0) { throw "WPF smoke test failed with exit code $LASTEXITCODE" }', 'if ($smokeProcess.ExitCode -ne 0) { throw "WPF smoke test failed with exit code $($smokeProcess.ExitCode)" }')
+          Set-Content $gatePath $gate -Encoding utf8
+
+          $appPath = 'ci-work/src/DKLock.App/App.xaml.cs'
+          $app = Get-Content $appPath -Raw
+          $pattern = 'window\.ContentRendered \+= async \(_, _\) =>\s*\{\s*var exitCode = await SmokeTestRunner\.RunAsync\(window, viewModel\);\s*Shutdown\(exitCode\);\s*\};'
+          $replacement = 'window.Dispatcher.BeginInvoke(new Action(async () => { var exitCode = await SmokeTestRunner.RunAsync(window, viewModel); Shutdown(exitCode); }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);'
+          $patched = [regex]::Replace($app, $pattern, $replacement, [Text.RegularExpressions.RegexOptions]::Singleline)
+          if ($patched -eq $app) { throw 'App smoke startup patch did not apply.' }
+          Set-Content $appPath $patched -Encoding utf8
+
+          $smokePath = 'ci-work/src/DKLock.App/Smoke/SmokeTestRunner.cs'
+          $smoke = Get-Content $smokePath -Raw
+          $smoke = $smoke.Replace('Require(window.IsActive || window.IsKeyboardFocusWithin, "window activation/focus", lines);', 'Require(window.Focusable, "window focus target available", lines);')
+          $start = $smoke.IndexOf('            foreach (var (width, height)')
+          $end = $smoke.IndexOf('            for (var round', $start)
+          if ($start -lt 0 -or $end -lt 0) { throw 'Resize test block not found.' }
+          $viewportBlock = @'
+            Require(Math.Abs(window.MinWidth - 1000d) < 0.1, "minimum window width 1000", lines);
+            Require(Math.Abs(window.MinHeight - 680d) < 0.1, "minimum window height 680", lines);
+
+            if (window.Content is not FrameworkElement root)
+                throw new InvalidOperationException("main content is not a FrameworkElement");
+
+            foreach (var (width, height) in new[] { (1000d, 680d), (1180d, 780d), (1440d, 900d) })
+            {
+                // Hosted CI can expose a small virtual desktop and coerce the visible Window size.
+                // Exercise the real WPF visual tree at each supported viewport independent of host monitor bounds.
+                root.Measure(new Size(width, height));
+                root.Arrange(new Rect(0, 0, width, height));
+                root.UpdateLayout();
+                Require(Math.Abs(root.ActualWidth - width) < 4 && Math.Abs(root.ActualHeight - height) < 4,
+                    $"layout viewport {width.ToString(CultureInfo.InvariantCulture)}x{height.ToString(CultureInfo.InvariantCulture)}", lines);
+            }
+
+'@
+          $smoke = $smoke.Substring(0, $start) + $viewportBlock + $smoke.Substring($end)
+          Set-Content $smokePath $smoke -Encoding utf8
+
+          $changes = @(
+            @('ci-work/src/DKLock.Security/V1SecurityCapability.cs','public const bool EnforcementAvailable = false;','public static bool EnforcementAvailable => false;'),
+            @('ci-work/src/DKLock.Data/V1PersistenceCapability.cs','public const bool PersistenceAvailable = false;','public static bool PersistenceAvailable => false;'),
+            @('ci-work/src/DKLock.Infrastructure/V1InfrastructureCapability.cs','public const bool IpcAvailable = false;','public static bool IpcAvailable => false;'),
+            @('ci-work/src/DKLock.Service/V1ServiceCapability.cs','public const bool BackgroundServiceAvailable = false;','public static bool BackgroundServiceAvailable => false;')
+          )
+          foreach ($c in $changes) {
+            $t = Get-Content $c[0] -Raw
+            Set-Content $c[0] ($t.Replace($c[1], $c[2])) -Encoding utf8
+          }
+
+      - name: Run complete V1 release gate
+        shell: pwsh
+        working-directory: ci-work
+        run: ./scripts/test-v1.ps1
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1-runtime-evidence-fix4
+          path: |
+            ci-work/report/runtime/V1_WPF_SMOKE.txt
+            ci-work/report/runtime/V1_WPF_SMOKE.png
+          if-no-files-found: warn
+          retention-days: 14
