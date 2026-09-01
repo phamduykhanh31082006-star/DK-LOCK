@@ -1,0 +1,16 @@
+<Window x:Class="DKLock.App.Dialogs.PinSetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Configure unlock PIN" Width="420" Height="290" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Style="{StaticResource DialogWindow}">
+    <Grid Margin="28">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock Text="Configure unlock PIN" FontSize="24" FontWeight="SemiBold"/>
+        <TextBlock Grid.Row="1" Margin="0,8,0,18" Style="{StaticResource SecondaryText}" Text="Optional 4–8 digit PIN. It is hashed with Argon2id before storage."/>
+        <PasswordBox x:Name="PinBox" Grid.Row="2" Height="38" Style="{StaticResource SecurePasswordBox}" MaxLength="8"/>
+        <TextBlock x:Name="ErrorText" Grid.Row="3" Foreground="{StaticResource Brush.Error}" Margin="0,10,0,0"/>
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancel" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="Cancel_Click"/>
+            <Button Content="Save PIN" Style="{StaticResource PrimaryButton}" Click="Save_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>
