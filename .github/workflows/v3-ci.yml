@@ -37,10 +37,11 @@ jobs:
           tar -xf 'v3src.tar.xz' -C 'ci-extract'
           if (-not (Test-Path 'ci-extract/DK_LOCK_V3/DKLock.sln')) { throw 'V3 candidate extraction failed.' }
 
-      - name: Apply reviewed release-gate script correction
+      - name: Apply reviewed V3 corrections
         shell: pwsh
         run: |
           Copy-Item 'ci/test-v3-fixed.ps1' 'ci-extract/DK_LOCK_V3/scripts/test-v3.ps1' -Force
+          Copy-Item -Path 'ci/overrides/*' -Destination 'ci-extract/DK_LOCK_V3' -Recurse -Force
 
       - name: Run all 15 V3 release gates
         shell: pwsh
@@ -63,12 +64,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Upload gate logs and tested source on success
+      - name: Clean build intermediates after successful gate
         if: success()
         shell: pwsh
         run: |
           Get-ChildItem 'ci-extract/DK_LOCK_V3' -Directory -Recurse | Where-Object { $_.Name -in @('bin','obj') } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force
-          Remove-Item 'ci-extract/DK_LOCK_V3/report/runtime/V1_WPF_SMOKE.png' -ErrorAction SilentlyContinue
 
       - name: Upload clean tested candidate
         if: success()
