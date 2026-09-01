@@ -1,0 +1,85 @@
+name: DK LOCK V1 Windows Gate Fix 5
+
+on:
+  push:
+    branches:
+      - v1-ci-fix5
+
+permissions:
+  contents: read
+
+jobs:
+  v1-gate:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    env:
+      PYTHONUTF8: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rehydrate verified source
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem 'ci/v1src.xz.part*' | Sort-Object Name
+          if ($parts.Count -ne 5) { throw "Expected 5 source parts." }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v1src.tar.xz', [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash 'v1src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '1f18a8a95eb36a428e27dc35c8b97a98bfec9decb8224792fec5c414efee52dd') { throw "Source hash mismatch: $hash" }
+          New-Item -ItemType Directory ci-work -Force | Out-Null
+          tar -xf v1src.tar.xz -C ci-work
+
+      - name: Apply reviewed V1 corrections
+        shell: pwsh
+        run: |
+          $gatePath = 'ci-work/scripts/test-v1.ps1'
+          $gate = Get-Content $gatePath -Raw
+          if ($gate -notmatch 'PYTHONUTF8') { $gate = $gate.Replace('$ErrorActionPreference = "Stop"', '$ErrorActionPreference = "Stop"' + [Environment]::NewLine + '$env:PYTHONUTF8 = "1"') }
+          $gate = $gate.Replace('& $app --smoke-test', '$smokeProcess = Start-Process -FilePath $app -ArgumentList "--smoke-test" -Wait -PassThru')
+          $gate = $gate.Replace('if ($LASTEXITCODE -ne 0) { throw "WPF smoke test failed with exit code $LASTEXITCODE" }', 'if ($smokeProcess.ExitCode -ne 0) { throw "WPF smoke test failed with exit code $($smokeProcess.ExitCode)" }')
+          Set-Content $gatePath $gate -Encoding utf8
+
+          $appPath = 'ci-work/src/DKLock.App/App.xaml.cs'
+          $app = Get-Content $appPath -Raw
+          $pattern = 'window\.ContentRendered \+= async \(_, _\) =>\s*\{\s*var exitCode = await SmokeTestRunner\.RunAsync\(window, viewModel\);\s*Shutdown\(exitCode\);\s*\};'
+          $replacement = 'window.Dispatcher.BeginInvoke(new Action(async () => { var exitCode = await SmokeTestRunner.RunAsync(window, viewModel); Shutdown(exitCode); }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);'
+          $patched = [regex]::Replace($app, $pattern, $replacement, [Text.RegularExpressions.RegexOptions]::Singleline)
+          if ($patched -eq $app) { throw 'App smoke startup patch did not apply.' }
+          Set-Content $appPath $patched -Encoding utf8
+
+          $smokeB64 = 'dXNpbmcgU3lzdGVtLkdsb2JhbGl6YXRpb247CnVzaW5nIFN5c3RlbS5JTzsKdXNpbmcgU3lzdGVtLldpbmRvd3M7CnVzaW5nIFN5c3RlbS5XaW5kb3dzLklucHV0Owp1c2luZyBTeXN0ZW0uV2luZG93cy5NZWRpYTsKdXNpbmcgU3lzdGVtLldpbmRvd3MuTWVkaWEuSW1hZ2luZzsKdXNpbmcgU3lzdGVtLldpbmRvd3MuVGhyZWFkaW5nOwp1c2luZyBES0xvY2suQXBwLlZpZXdNb2RlbHM7CgpuYW1lc3BhY2UgREtMb2NrLkFwcC5TbW9rZTsKCnB1YmxpYyBzdGF0aWMgY2xhc3MgU21va2VUZXN0UnVubmVyCnsKICAgIHB1YmxpYyBzdGF0aWMgYXN5bmMgVGFzazxpbnQ+IFJ1bkFzeW5jKE1haW5XaW5kb3cgd2luZG93LCBNYWluVmlld01vZGVsIHZpZXdNb2RlbCkKICAgIHsKICAgICAgICB2YXIgbGluZXMgPSBuZXcgTGlzdDxzdHJpbmc+CiAgICAgICAgewogICAgICAgICAgICAiREsgTE9DSyBWMSBXUEYgUlVOVElNRSBTTU9LRSIsCiAgICAgICAgICAgICQiVVRDOiB7RGF0ZVRpbWVPZmZzZXQuVXRjTm93Ok99IgogICAgICAgIH07CgogICAgICAgIHRyeQogICAgICAgIHsKICAgICAgICAgICAgYXdhaXQgd2luZG93LkRpc3BhdGNoZXIuSW52b2tlQXN5bmMoKCkgPT4geyB9LCBEaXNwYXRjaGVyUHJpb3JpdHkuQXBwbGljYXRpb25JZGxlKTsKICAgICAgICAgICAgUmVxdWlyZShBcHBsaWNhdGlvbi5DdXJyZW50LldpbmRvd3MuQ291bnQgPT0gMSwgInNpbmdsZSBtYWluIHdpbmRvdyIsIGxpbmVzKTsKICAgICAgICAgICAgUmVxdWlyZSh2aWV3TW9kZWwuTmF2aWdhdGlvbi5Db3VudCA9PSA3LCAic2V2ZW4gcHJpbWFyeSBwYWdlcyIsIGxpbmVzKTsKCiAgICAgICAgICAgIGZvcmVhY2ggKHZhciBuYXYgaW4gdmlld01vZGVsLk5hdmlnYXRpb24pCiAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgIHZpZXdNb2RlbC5OYXZpZ2F0ZVRvKG5hdi5JZCk7CiAgICAgICAgICAgICAgICBhd2FpdCB3aW5kb3cuRGlzcGF0Y2hlci5JbnZva2VBc3luYygoKSA9PiB7IH0sIERpc3BhdGNoZXJQcmlvcml0eS5CYWNrZ3JvdW5kKTsKICAgICAgICAgICAgICAgIFJlcXVpcmUodmlld01vZGVsLkN1cnJlbnRQYWdlLklkID09IG5hdi5JZCwgJCJuYXZpZ2F0ZToge25hdi5JZH0iLCBsaW5lcyk7CiAgICAgICAgICAgIH0KCiAgICAgICAgICAgIHZhciBrZXlCaW5kaW5ncyA9IHdpbmRvdy5JbnB1dEJpbmRpbmdzLk9mVHlwZTxLZXlCaW5kaW5nPigpLlRvQXJyYXkoKTsKICAgICAgICAgICAgUmVxdWlyZShrZXlCaW5kaW5ncy5MZW5ndGggPT0gNywgInNldmVuIEN0cmwrMS4uNyBrZXkgYmluZGluZ3MiLCBsaW5lcyk7CiAgICAgICAgICAgIGZvciAodmFyIGluZGV4ID0gMDsgaW5kZXggPCBrZXlCaW5kaW5ncy5MZW5ndGg7IGluZGV4KyspCiAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgIHZhciBiaW5kaW5nID0ga2V5QmluZGluZ3NbaW5kZXhdOwogICAgICAgICAgICAgICAgUmVxdWlyZShiaW5kaW5nLk1vZGlmaWVycyA9PSBNb2RpZmllcktleXMuQ29udHJvbCwgJCJrZXliaW5kaW5nIHtpbmRleCArIDF9IG1vZGlmaWVyIiwgbGluZXMpOwogICAgICAgICAgICAgICAgUmVxdWlyZShiaW5kaW5nLkNvbW1hbmQ/LkNhbkV4ZWN1dGUoYmluZGluZy5Db21tYW5kUGFyYW1ldGVyKSA9PSB0cnVlLCAkImtleWJpbmRpbmcge2luZGV4ICsgMX0gZXhlY3V0YWJsZSIsIGxpbmVzKTsKICAgICAgICAgICAgICAgIGJpbmRpbmcuQ29tbWFuZD8uRXhlY3V0ZShiaW5kaW5nLkNvbW1hbmRQYXJhbWV0ZXIpOwogICAgICAgICAgICAgICAgYXdhaXQgd2luZG93LkRpc3BhdGNoZXIuSW52b2tlQXN5bmMoKCkgPT4geyB9LCBEaXNwYXRjaGVyUHJpb3JpdHkuQmFja2dyb3VuZCk7CiAgICAgICAgICAgICAgICBSZXF1aXJlKHZpZXdNb2RlbC5DdXJyZW50UGFnZS5JZCA9PSB2aWV3TW9kZWwuTmF2aWdhdGlvbltpbmRleF0uSWQsICQia2V5YmluZGluZyB7aW5kZXggKyAxfSByb3V0ZSIsIGxpbmVzKTsKICAgICAgICAgICAgfQoKICAgICAgICAgICAgUmVxdWlyZShNYXRoLkFicyh3aW5kb3cuTWluV2lkdGggLSAxMDAwZCkgPCAwLjEsICJtaW5pbXVtIHdpbmRvdyB3aWR0aCAxMDAwIiwgbGluZXMpOwogICAgICAgICAgICBSZXF1aXJlKE1hdGguQWJzKHdpbmRvdy5NaW5IZWlnaHQgLSA2ODBkKSA8IDAuMSwgIm1pbmltdW0gd2luZG93IGhlaWdodCA2ODAiLCBsaW5lcyk7CgogICAgICAgICAgICBpZiAod2luZG93LkNvbnRlbnQgaXMgbm90IEZyYW1ld29ya0VsZW1lbnQgcm9vdCkKICAgICAgICAgICAgICAgIHRocm93IG5ldyBJbnZhbGlkT3BlcmF0aW9uRXhjZXB0aW9uKCJtYWluIGNvbnRlbnQgaXMgbm90IGEgRnJhbWV3b3JrRWxlbWVudCIpOwoKICAgICAgICAgICAgZm9yZWFjaCAodmFyICh3aWR0aCwgaGVpZ2h0KSBpbiBuZXdbXSB7ICgxMDAwZCwgNjgwZCksICgxMTgwZCwgNzgwZCksICgxNDQwZCwgOTAwZCkgfSkKICAgICAgICAgICAgewogICAgICAgICAgICAgICAgLy8gSG9zdGVkIENJIGNhbiBleHBvc2UgYSBzbWFsbCB2aXJ0dWFsIGRlc2t0b3AgYW5kIGNvZXJjZSB0aGUgdmlzaWJsZSBXaW5kb3cgc2l6ZS4KICAgICAgICAgICAgICAgIC8vIEV4ZXJjaXNlIHRoZSByZWFsIFdQRiB2aXN1YWwgdHJlZSBhdCBlYWNoIHN1cHBvcnRlZCB2aWV3cG9ydCBpbmRlcGVuZGVudCBvZiBob3N0IG1vbml0b3IgYm91bmRzLgogICAgICAgICAgICAgICAgcm9vdC5NZWFzdXJlKG5ldyBTaXplKHdpZHRoLCBoZWlnaHQpKTsKICAgICAgICAgICAgICAgIHJvb3QuQXJyYW5nZShuZXcgUmVjdCgwLCAwLCB3aWR0aCwgaGVpZ2h0KSk7CiAgICAgICAgICAgICAgICByb290LlVwZGF0ZUxheW91dCgpOwogICAgICAgICAgICAgICAgUmVxdWlyZShNYXRoLkFicyhyb290LkFjdHVhbFdpZHRoIC0gd2lkdGgpIDwgNCAmJiBNYXRoLkFicyhyb290LkFjdHVhbEhlaWdodCAtIGhlaWdodCkgPCA0LAogICAgICAgICAgICAgICAgICAgICQibGF5b3V0IHZpZXdwb3J0IHt3aWR0aC5Ub1N0cmluZyhDdWx0dXJlSW5mby5JbnZhcmlhbnRDdWx0dXJlKX14e2hlaWdodC5Ub1N0cmluZyhDdWx0dXJlSW5mby5JbnZhcmlhbnRDdWx0dXJlKX0iLCBsaW5lcyk7CiAgICAgICAgICAgIH0KCiAgICAgICAgICAgIGZvciAodmFyIHJvdW5kID0gMTsgcm91bmQgPD0gMzsgcm91bmQrKykKICAgICAgICAgICAgewogICAgICAgICAgICAgICAgZm9yZWFjaCAodmFyIG5hdiBpbiB2aWV3TW9kZWwuTmF2aWdhdGlvbikgdmlld01vZGVsLk5hdmlnYXRlVG8obmF2LklkKTsKICAgICAgICAgICAgICAgIGF3YWl0IHdpbmRvdy5EaXNwYXRjaGVyLkludm9rZUFzeW5jKCgpID0+IHsgfSwgRGlzcGF0Y2hlclByaW9yaXR5LkJhY2tncm91bmQpOwogICAgICAgICAgICAgICAgUmVxdWlyZSh2aWV3TW9kZWwuQ3VycmVudFBhZ2UuSWQgPT0gInNldHRpbmdzIiwgJCJuYXZpZ2F0aW9uIHJlcGV0aXRpb24gcm91bmQge3JvdW5kfSIsIGxpbmVzKTsKICAgICAgICAgICAgfQoKICAgICAgICAgICAgdmlld01vZGVsLk5hdmlnYXRlVG8oImRhc2hib2FyZCIpOwogICAgICAgICAgICB3aW5kb3cuQWN0aXZhdGUoKTsKICAgICAgICAgICAgS2V5Ym9hcmQuRm9jdXMod2luZG93KTsKICAgICAgICAgICAgYXdhaXQgd2luZG93LkRpc3BhdGNoZXIuSW52b2tlQXN5bmMoKCkgPT4geyB9LCBEaXNwYXRjaGVyUHJpb3JpdHkuQXBwbGljYXRpb25JZGxlKTsKICAgICAgICAgICAgUmVxdWlyZSh3aW5kb3cuSXNWaXNpYmxlLCAibWFpbiB3aW5kb3cgdmlzaWJsZSIsIGxpbmVzKTsKICAgICAgICAgICAgUmVxdWlyZSh3aW5kb3cuRm9jdXNhYmxlLCAid2luZG93IGZvY3VzIHRhcmdldCBhdmFpbGFibGUiLCBsaW5lcyk7CgogICAgICAgICAgICB2YXIgcmVwb3J0RGlyZWN0b3J5ID0gUmVzb2x2ZVJlcG9ydERpcmVjdG9yeSgpOwogICAgICAgICAgICBEaXJlY3RvcnkuQ3JlYXRlRGlyZWN0b3J5KHJlcG9ydERpcmVjdG9yeSk7CiAgICAgICAgICAgIFJlbmRlcih3aW5kb3csIFBhdGguQ29tYmluZShyZXBvcnREaXJlY3RvcnksICJWMV9XUEZfU01PS0UucG5nIikpOwogICAgICAgICAgICBsaW5lcy5BZGQoIlBBU1M6IHJlbmRlcmVkIHNjcmVlbnNob3QiKTsKICAgICAgICAgICAgbGluZXMuQWRkKCJSRVNVTFQ6IFBBU1MiKTsKICAgICAgICAgICAgRmlsZS5Xcml0ZUFsbExpbmVzKFBhdGguQ29tYmluZShyZXBvcnREaXJlY3RvcnksICJWMV9XUEZfU01PS0UudHh0IiksIGxpbmVzKTsKICAgICAgICAgICAgcmV0dXJuIDA7CiAgICAgICAgfQogICAgICAgIGNhdGNoIChFeGNlcHRpb24gZXgpCiAgICAgICAgewogICAgICAgICAgICBsaW5lcy5BZGQoJCJGQUlMOiB7ZXguR2V0VHlwZSgpLk5hbWV9OiB7ZXguTWVzc2FnZX0iKTsKICAgICAgICAgICAgbGluZXMuQWRkKCJSRVNVTFQ6IEZBSUwiKTsKICAgICAgICAgICAgdmFyIHJlcG9ydERpcmVjdG9yeSA9IFJlc29sdmVSZXBvcnREaXJlY3RvcnkoKTsKICAgICAgICAgICAgRGlyZWN0b3J5LkNyZWF0ZURpcmVjdG9yeShyZXBvcnREaXJlY3RvcnkpOwogICAgICAgICAgICBGaWxlLldyaXRlQWxsTGluZXMoUGF0aC5Db21iaW5lKHJlcG9ydERpcmVjdG9yeSwgIlYxX1dQRl9TTU9LRS50eHQiKSwgbGluZXMpOwogICAgICAgICAgICByZXR1cm4gMTsKICAgICAgICB9CiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgdm9pZCBSZXF1aXJlKGJvb2wgY29uZGl0aW9uLCBzdHJpbmcgbmFtZSwgSUNvbGxlY3Rpb248c3RyaW5nPiBsaW5lcykKICAgIHsKICAgICAgICBpZiAoIWNvbmRpdGlvbikgdGhyb3cgbmV3IEludmFsaWRPcGVyYXRpb25FeGNlcHRpb24obmFtZSk7CiAgICAgICAgbGluZXMuQWRkKCQiUEFTUzoge25hbWV9Iik7CiAgICB9CgogICAgcHJpdmF0ZSBzdGF0aWMgc3RyaW5nIFJlc29sdmVSZXBvcnREaXJlY3RvcnkoKQogICAgewogICAgICAgIHZhciBjdXJyZW50ID0gbmV3IERpcmVjdG9yeUluZm8oQXBwQ29udGV4dC5CYXNlRGlyZWN0b3J5KTsKICAgICAgICB3aGlsZSAoY3VycmVudCBpcyBub3QgbnVsbCkKICAgICAgICB7CiAgICAgICAgICAgIGlmIChGaWxlLkV4aXN0cyhQYXRoLkNvbWJpbmUoY3VycmVudC5GdWxsTmFtZSwgIkRLTG9jay5zbG4iKSkpCiAgICAgICAgICAgICAgICByZXR1cm4gUGF0aC5Db21iaW5lKGN1cnJlbnQuRnVsbE5hbWUsICJyZXBvcnQiLCAicnVudGltZSIpOwogICAgICAgICAgICBjdXJyZW50ID0gY3VycmVudC5QYXJlbnQ7CiAgICAgICAgfQogICAgICAgIHJldHVybiBQYXRoLkNvbWJpbmUoQXBwQ29udGV4dC5CYXNlRGlyZWN0b3J5LCAicmVwb3J0IiwgInJ1bnRpbWUiKTsKICAgIH0KCiAgICBwcml2YXRlIHN0YXRpYyB2b2lkIFJlbmRlcihXaW5kb3cgd2luZG93LCBzdHJpbmcgb3V0cHV0UGF0aCkKICAgIHsKICAgICAgICB3aW5kb3cuVXBkYXRlTGF5b3V0KCk7CiAgICAgICAgdmFyIHdpZHRoID0gTWF0aC5NYXgoMSwgKGludClNYXRoLkNlaWxpbmcod2luZG93LkFjdHVhbFdpZHRoKSk7CiAgICAgICAgdmFyIGhlaWdodCA9IE1hdGguTWF4KDEsIChpbnQpTWF0aC5DZWlsaW5nKHdpbmRvdy5BY3R1YWxIZWlnaHQpKTsKICAgICAgICB2YXIgYml0bWFwID0gbmV3IFJlbmRlclRhcmdldEJpdG1hcCh3aWR0aCwgaGVpZ2h0LCA5NiwgOTYsIFBpeGVsRm9ybWF0cy5QYmdyYTMyKTsKICAgICAgICBiaXRtYXAuUmVuZGVyKHdpbmRvdyk7CiAgICAgICAgdmFyIGVuY29kZXIgPSBuZXcgUG5nQml0bWFwRW5jb2RlcigpOwogICAgICAgIGVuY29kZXIuRnJhbWVzLkFkZChCaXRtYXBGcmFtZS5DcmVhdGUoYml0bWFwKSk7CiAgICAgICAgdXNpbmcgdmFyIHN0cmVhbSA9IEZpbGUuQ3JlYXRlKG91dHB1dFBhdGgpOwogICAgICAgIGVuY29kZXIuU2F2ZShzdHJlYW0pOwogICAgfQp9Cg=='
+          [IO.File]::WriteAllBytes('ci-work/src/DKLock.App/Smoke/SmokeTestRunner.cs', [Convert]::FromBase64String($smokeB64))
+
+          $changes = @(
+            @('ci-work/src/DKLock.Security/V1SecurityCapability.cs','public const bool EnforcementAvailable = false;','public static bool EnforcementAvailable => false;'),
+            @('ci-work/src/DKLock.Data/V1PersistenceCapability.cs','public const bool PersistenceAvailable = false;','public static bool PersistenceAvailable => false;'),
+            @('ci-work/src/DKLock.Infrastructure/V1InfrastructureCapability.cs','public const bool IpcAvailable = false;','public static bool IpcAvailable => false;'),
+            @('ci-work/src/DKLock.Service/V1ServiceCapability.cs','public const bool BackgroundServiceAvailable = false;','public static bool BackgroundServiceAvailable => false;')
+          )
+          foreach ($c in $changes) {
+            $t = Get-Content $c[0] -Raw
+            Set-Content $c[0] ($t.Replace($c[1], $c[2])) -Encoding utf8
+          }
+
+      - name: Run V1 release gate
+        shell: pwsh
+        working-directory: ci-work
+        run: ./scripts/test-v1.ps1
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1-runtime-evidence-fix5
+          path: |
+            ci-work/report/runtime/V1_WPF_SMOKE.txt
+            ci-work/report/runtime/V1_WPF_SMOKE.png
+          if-no-files-found: warn
+          retention-days: 14
