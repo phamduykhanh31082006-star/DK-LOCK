@@ -84,6 +84,8 @@ jobs:
           $content = $content.Replace('WaitForExitAsync(target5, TimeSpan.FromSeconds(5))', 'WaitForExitAsync(target5, TimeSpan.FromSeconds(8))')
           Set-Content -Path $v3Regression -Value $content -Encoding utf8
 
+          if (Test-Path 'ci/v5-overrides') { Copy-Item -Path 'ci/v5-overrides/*' -Destination 'ci-extract/DK_LOCK_V5' -Recurse -Force }
+
           if (-not (Test-Path 'ci-extract/DK_LOCK_V5/DKLock.sln')) { throw 'V5 candidate reconstruction failed.' }
 
       - name: Run all 19 V5 release gates
