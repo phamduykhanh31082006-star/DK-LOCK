@@ -1,0 +1,90 @@
+name: DK LOCK V2 Core Release Gate Fix 2
+
+on:
+  push:
+    branches: [ "v2-core-fix2" ]
+  workflow_dispatch:
+
+jobs:
+  v2-release-gate:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rehydrate exact V2 and V1 baseline snapshots
+        shell: pwsh
+        run: |
+          $v2Parts = @('ci/v2lean.part00','ci/v2lean.part01','ci/v2lean.part02a','ci/v2lean.part02b','ci/v2lean.part02c','ci/v2lean.part03','ci/v2lean.part04','ci/v2lean.part05')
+          $v2b64 = ($v2Parts | ForEach-Object { (Get-Content $_ -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v2src.tar.xz', [Convert]::FromBase64String($v2b64))
+          $v2Expected = '378968e29cf39eaa2c37cd5b2d2c25ed1c202eaff3526e3efd2ee080335ed0fd'
+          $v2Actual = (Get-FileHash 'v2src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "V2 source SHA256: $v2Actual"
+          if ($v2Actual -ne $v2Expected) { throw 'V2 source archive SHA256 mismatch.' }
+          New-Item -ItemType Directory ci-work -Force | Out-Null
+          tar -xf v2src.tar.xz -C ci-work
+
+          $v1Parts = Get-ChildItem 'ci/v1src.xz.part*' | Sort-Object Name
+          if ($v1Parts.Count -ne 5) { throw "Expected 5 V1 baseline parts, found $($v1Parts.Count)." }
+          $v1b64 = ($v1Parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v1src.tar.xz', [Convert]::FromBase64String($v1b64))
+          $v1Expected = '1f18a8a95eb36a428e27dc35c8b97a98bfec9decb8224792fec5c414efee52dd'
+          $v1Actual = (Get-FileHash 'v1src.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "V1 baseline SHA256: $v1Actual"
+          if ($v1Actual -ne $v1Expected) { throw 'V1 baseline archive SHA256 mismatch.' }
+          New-Item -ItemType Directory v1-base -Force | Out-Null
+          tar -xf v1src.tar.xz -C v1-base
+
+      - name: Apply reviewed V2 gate corrections
+        shell: pwsh
+        run: |
+          Copy-Item -Path 'v1-base/docs/*' -Destination 'ci-work/docs' -Recurse -Force
+          Copy-Item -Path 'ci/test-v2-fixed.ps1' -Destination 'ci-work/scripts/test-v2.ps1' -Force
+
+          $statePath = 'ci-work/src/DKLock.App/State/InMemoryStateStore.cs'
+          $state = Get-Content $statePath -Raw
+          $old = @'
+              public void Publish(GlobalSecurityState state)
+              {
+                  _current = state ?? throw new ArgumentNullException(nameof(state));
+                  StateChanged?.Invoke(this, state);
+              }
+          '@
+          $new = @'
+              public GlobalSecurityState Publish(GlobalSecurityState state)
+              {
+                  _current = state ?? throw new ArgumentNullException(nameof(state));
+                  StateChanged?.Invoke(this, state);
+                  return state;
+              }
+          '@
+          $patched = $state.Replace($old.Trim(), $new.Trim())
+          if ($patched -eq $state) { throw 'InMemoryStateStore V2 contract patch did not apply.' }
+          Set-Content $statePath $patched -Encoding utf8
+
+      - name: Run complete V2 release gate
+        shell: pwsh
+        working-directory: ci-work
+        run: ./scripts/test-v2.ps1
+
+      - name: Upload V2 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-runtime-evidence-fix2
+          path: |
+            ci-work/report/runtime/V2_WPF_SMOKE_ONLINE.txt
+            ci-work/report/runtime/V2_WPF_SMOKE_ONLINE.png
+            ci-work/report/runtime/V2_WPF_SMOKE_OFFLINE.txt
+            ci-work/report/runtime/V2_WPF_SMOKE_OFFLINE.png
+          if-no-files-found: warn
+          retention-days: 14
