@@ -84,6 +84,27 @@ if ($installer -notmatch 'VerifyInstalledDirectory\(_options\.InstallRoot\);') {
 if ($installer -match 'allowedExtraFiles|allowedExtras') {
     throw 'V7 payload integrity validator was unexpectedly relaxed.'
 }
-
 Set-Content $installerPath $installer -Encoding utf8
-Write-Host 'Applied V7 ACL-safe transactional repair rollback snapshot.'
+
+# The original V7 static validator encoded the old sibling Directory.Move implementation as two
+# literal implementation tokens. Replace only those exact assertions with the safer transaction
+# markers. Functional Gate 11 still performs the real repair and encrypted-data persistence test.
+$validatorPath = Join-Path $Root 'tests/validate_v7.py'
+if (-not (Test-Path $validatorPath)) { throw "Missing V7 static validator: $validatorPath" }
+$validator = Get-Content $validatorPath -Raw
+if ($validator -notmatch '\.rollback-' -or $validator -notmatch 'Directory\.Move') {
+    throw 'Expected legacy V7 repair implementation assertions were not found.'
+}
+$validator = $validator.Replace('".rollback-"', '"dklock-v7-rollback-"')
+$validator = $validator.Replace("'.rollback-'", "'dklock-v7-rollback-'")
+$validator = $validator.Replace('"Directory.Move"', '"ClearDirectory"')
+$validator = $validator.Replace("'Directory.Move'", "'ClearDirectory'")
+if ($validator -match '(["''])\.rollback-\1' -or $validator -match '(["''])Directory\.Move\1') {
+    throw 'Legacy V7 repair static assertions remain after validator update.'
+}
+if ($validator -notmatch 'dklock-v7-rollback-' -or $validator -notmatch 'ClearDirectory') {
+    throw 'ACL-safe V7 repair static assertions were not installed.'
+}
+Set-Content $validatorPath $validator -Encoding utf8
+
+Write-Host 'Applied V7 ACL-safe transactional repair rollback snapshot and aligned static repair assertions.'
