@@ -104,6 +104,7 @@ jobs:
           Write-Host "V7 delta SHA256: $actual"
           if ($actual -ne '009582a3cb638eac583fc3c35c2162c3542096ce64268188ae011e1d839e6794') { throw "V7 SHA mismatch: $actual" }
           tar -xf 'v7delta.tar.xz' -C 'ci-extract/DK_LOCK_V7'
+          & 'ci/v7-patches/apply-v7-fixes.ps1' -Root 'ci-extract/DK_LOCK_V7'
           if (-not (Test-Path 'ci-extract/DK_LOCK_V7/scripts/test-v7.ps1')) { throw 'V7 candidate reconstruction failed.' }
 
       - name: Run all V7 production release gates
