@@ -38,7 +38,7 @@ jobs:
           Move-Item 'ci-extract/DK_LOCK_V3' 'ci-extract/DK_LOCK_V4'
 
           $v4 = Get-ChildItem 'ci/v4delta.part*' | Sort-Object Name
-          if ($v4.Count -ne 7) { throw "Expected 7 V4 delta parts, found $($v4.Count)." }
+          if ($v4.Count -ne 7) { throw "Expected 7 V4 parts, found $($v4.Count)." }
           $b64 = ($v4 | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
           [IO.File]::WriteAllBytes('v4delta.tar.xz', [Convert]::FromBase64String($b64))
           $actual = (Get-FileHash 'v4delta.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -94,6 +94,7 @@ jobs:
           Write-Host "V6 delta SHA256: $actual"
           if ($actual -ne '791159171482f74dbde982cd4503baeb3fa9a8f36dc0f8763a1d2caf4c61c380') { throw "V6 SHA mismatch: $actual" }
           tar -xf 'v6delta.tar.xz' -C 'ci-extract/DK_LOCK_V6'
+          if (Test-Path 'ci/v6-overrides') { Copy-Item -Path 'ci/v6-overrides/*' -Destination 'ci-extract/DK_LOCK_V6' -Recurse -Force }
           if (-not (Test-Path 'ci-extract/DK_LOCK_V6/scripts/test-v6.ps1')) { throw 'V6 candidate reconstruction failed.' }
 
       - name: Run all 20 V6 release gates
