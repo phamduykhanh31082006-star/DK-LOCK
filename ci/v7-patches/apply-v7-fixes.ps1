@@ -179,6 +179,33 @@ if ($installer -notmatch 'private static void VerifyInstalledDirectory\(') {
 '@
     $installer = $installer.Replace($marker, $helper + $marker)
 }
+
+# In CI/runtime-evidence mode, persist installer progress and the exact caught failure message. The
+# production installer remains silent unless DKLOCK_V7_EVIDENCE_DIR is explicitly supplied.
+$reportExpression = '    private void Report(int percent, string message) => ProgressChanged?.Invoke(this, new SetupProgress(percent, message));'
+if ($installer.Contains($reportExpression)) {
+    $reportBlock = @'
+    private void Report(int percent, string message)
+    {
+        ProgressChanged?.Invoke(this, new SetupProgress(percent, message));
+        try
+        {
+            var evidenceDir = Environment.GetEnvironmentVariable("DKLOCK_V7_EVIDENCE_DIR");
+            if (string.IsNullOrWhiteSpace(evidenceDir)) return;
+            Directory.CreateDirectory(evidenceDir);
+            var logPath = Path.Combine(evidenceDir, "V7_SETUP_INSTALL.txt");
+            File.AppendAllText(logPath, $"{DateTimeOffset.UtcNow:O} [{percent,3}%] {message}{Environment.NewLine}", Encoding.UTF8);
+        }
+        catch
+        {
+            // Evidence logging must never change installer success/failure semantics.
+        }
+    }
+'@
+    $installer = $installer.Replace($reportExpression, $reportBlock.TrimEnd())
+}
+if ($installer -notmatch 'V7_SETUP_INSTALL\.txt') { throw 'V7 silent setup evidence logger was not applied.' }
+
 $verifyCount = ([regex]::Matches($installer, 'VerifyInstalledDirectory\(_options\.InstallRoot\);')).Count
 if ($verifyCount -lt 2) { throw "Expected two installed-directory checks; found $verifyCount." }
 if ($installer -notmatch 'if \(!actualFiles\.SetEquals\(expectedFiles\)\)') { throw 'Strict unlisted-file payload check was unexpectedly changed.' }
@@ -234,4 +261,4 @@ foreach ($pair in $replacements.GetEnumerator()) {
 if ($test -match '(?m)^\s*& \$setup\s') { throw 'A V7 setup gate still uses the non-waiting native call operator.' }
 Set-Content $testPath $test -Encoding utf8
 
-Write-Host 'Applied V7 production fixes: explicit Windows pipe ACL platform contract, setup imports, SCM shutdown safety, synchronous elevation, strict payload/setup integrity, deterministic Setup E2E waits.'
+Write-Host 'Applied V7 production fixes: explicit Windows pipe ACL platform contract, setup imports, SCM shutdown safety, synchronous elevation, strict payload/setup integrity, deterministic Setup E2E waits, silent setup diagnostics.'
