@@ -37,5 +37,37 @@ foreach ($relative in $setupFiles) {
     }
 }
 
+$serviceOptions = Join-Path $Root 'src/DKLock.Service/ServiceOptions.cs'
+if (-not (Test-Path $serviceOptions)) {
+    throw "V7 service-options patch target not found: $serviceOptions"
+}
+
+$serviceText = Get-Content $serviceOptions -Raw
+$marker = '// V7 production service safety: never expose the test-shutdown endpoint from SCM mode.'
+if ($serviceText -notmatch [regex]::Escape($marker)) {
+    $guard = @"
+        $marker
+        foreach (var arg in args)
+        {
+            if (string.Equals(arg, "--windows-service", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(arg, "--service", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(arg, "--scm", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(arg, "--run-as-service", StringComparison.OrdinalIgnoreCase))
+            {
+                allowTestShutdown = false;
+                break;
+            }
+        }
+
+"@
+    $pattern = '(?m)^(\s*)return new ServiceOptions\('
+    if ($serviceText -notmatch $pattern) {
+        throw 'Could not locate ServiceOptions return expression for production shutdown safety patch.'
+    }
+    $serviceText = [regex]::Replace($serviceText, $pattern, { param($m) $guard + $m.Groups[1].Value + 'return new ServiceOptions(' }, 1)
+    Set-Content -Path $serviceOptions -Value $serviceText -Encoding utf8
+}
+
 Write-Host 'Applied V7 Windows-only named-pipe ACL analyzer annotation patch.'
 Write-Host 'Applied V7 explicit System.IO imports for setup sources.'
+Write-Host 'Applied V7 production service test-shutdown safety patch.'
