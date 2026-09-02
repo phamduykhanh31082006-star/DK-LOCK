@@ -70,6 +70,36 @@ if ($installer -notmatch 'private static void ClearDirectory\(') {
     $installer = $installer.Replace($marker, $helper + $marker)
 }
 
+# Preserve exact SCM diagnostics when a repaired service starts but never reaches RUNNING. Silent
+# setup evidence will record this exception message without changing production behavior.
+$startPattern = '(?ms)    private async Task StartServiceAsync\(bool ignoreFailure = false\).*?(?=\r?\n    private async Task StopServiceAsync\(\))'
+$startMatch = [regex]::Match($installer, $startPattern)
+if (-not $startMatch.Success) { throw 'V7 StartServiceAsync method not found.' }
+$startMethod = $startMatch.Value
+if ($startMethod -notmatch 'ProcessResult\? lastQuery') {
+    $loopLine = '        for (var i = 0; i < 40; i++)'
+    if (-not $startMethod.Contains($loopLine)) { throw 'V7 service start poll loop not found.' }
+    $startMethod = $startMethod.Replace($loopLine, "        ProcessResult? lastQuery = null;`r`n        for (var i = 0; i < 40; i++)")
+
+    $queryLine = '            var query = await ProcessRunner.RunAsync("sc.exe", "query", _options.ServiceName);'
+    if (-not $startMethod.Contains($queryLine)) { throw 'V7 service start query line not found.' }
+    $startMethod = $startMethod.Replace($queryLine, $queryLine + "`r`n            lastQuery = query;")
+
+    $failureLine = '        if (!ignoreFailure) throw new InvalidOperationException("Windows protection service did not reach RUNNING state.");'
+    if (-not $startMethod.Contains($failureLine)) { throw 'V7 generic service start failure line not found.' }
+    $failureBlock = @'
+        if (!ignoreFailure)
+        {
+            var startDetail = result.Combined.Trim();
+            var queryDetail = lastQuery?.Combined.Trim() ?? "no service query result";
+            throw new InvalidOperationException($"Windows protection service did not reach RUNNING state. sc-start-exit={result.ExitCode}; sc-start={startDetail}; last-query={queryDetail}");
+        }
+'@
+    $startMethod = $startMethod.Replace($failureLine, $failureBlock.TrimEnd())
+    $installer = $installer.Remove($startMatch.Index, $startMatch.Length).Insert($startMatch.Index, $startMethod)
+}
+if ($installer -notmatch 'sc-start-exit=') { throw 'V7 SCM start diagnostics were not applied.' }
+
 # Guardrails: the repair path must no longer rename InstallRoot, the rollback snapshot must be
 # outside Program Files, and strict post-install payload verification from the prior V7 fix remains.
 if ($installer -match 'Directory\.Move\(_options\.InstallRoot, rollback\)') {
@@ -107,4 +137,4 @@ if ($validator -notmatch 'dklock-v7-rollback-' -or $validator -notmatch 'ClearDi
 }
 Set-Content $validatorPath $validator -Encoding utf8
 
-Write-Host 'Applied V7 ACL-safe transactional repair rollback snapshot and aligned static repair assertions.'
+Write-Host 'Applied V7 ACL-safe transactional repair, aligned static assertions, and SCM failure diagnostics.'
