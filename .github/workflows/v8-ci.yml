@@ -120,6 +120,7 @@ jobs:
           Write-Host "V8 delta SHA256: $actual"
           if ($actual -ne '332ba3db873e5231e87756f4d109ba2af5f8212a0602b2ad6c5ce6d48a31229f') { throw "V8 SHA mismatch: $actual" }
           tar -xf 'v8delta.tar.xz' -C 'ci-extract/DK_LOCK_V8'
+          & 'ci/v8-patches/apply-v8-parser-fix.ps1' -Root 'ci-extract/DK_LOCK_V8'
           if (-not (Test-Path 'ci-extract/DK_LOCK_V8/scripts/test-v8.ps1')) { throw 'V8 candidate reconstruction failed.' }
 
       - name: Run all V8 bilingual production release gates
