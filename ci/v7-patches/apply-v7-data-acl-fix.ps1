@@ -35,7 +35,7 @@ $newAclMethod = @'
         rootArgs.AddRange(grants);
         rootArgs.AddRange(new[] { "/C", "/Q" });
         var rootResult = await ProcessRunner.RunAsync("icacls.exe", rootArgs.ToArray());
-        rootResult.EnsureSuccess("ProgramData root ACL hardening");
+        rootResult.EnsureSuccess("ProgramData ACL hardening");
 
         // Existing files may carry stale or stripped ACLs from a previous install/repair. Reset only
         // descendants to the secured root ACL; never reset the root itself back to ProgramData defaults.
