@@ -27,11 +27,8 @@ $newBackupBlock = @'
 '@
 $installer = [regex]::Replace($installer, $oldBackupPattern, $newBackupBlock.TrimEnd(), 1)
 
-$oldRestore = @'
-                TryDeleteDirectory(_options.InstallRoot);
-                if (rollback is not null && Directory.Exists(rollback)) Directory.Move(rollback, _options.InstallRoot);
-'@
-if (-not $installer.Contains($oldRestore.Trim())) {
+$oldRestorePattern = '(?ms)^[ \t]*TryDeleteDirectory\(_options\.InstallRoot\);\r?\n[ \t]*if \(rollback is not null && Directory\.Exists\(rollback\)\) Directory\.Move\(rollback, _options\.InstallRoot\);'
+if ($installer -notmatch $oldRestorePattern) {
     throw 'Expected V7 rollback restore block was not found.'
 }
 $newRestore = @'
@@ -45,7 +42,7 @@ $newRestore = @'
                     TryDeleteDirectory(_options.InstallRoot);
                 }
 '@
-$installer = $installer.Replace($oldRestore.Trim(), $newRestore.Trim())
+$installer = [regex]::Replace($installer, $oldRestorePattern, $newRestore.TrimEnd(), 1)
 
 if ($installer -notmatch 'private static void ClearDirectory\(') {
     $marker = '    private static void TryDeleteDirectory(string path)'
