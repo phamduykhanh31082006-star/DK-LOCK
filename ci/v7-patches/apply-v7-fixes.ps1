@@ -5,13 +5,16 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Named-pipe ACL construction is Windows-only. Keep the ACL implementation intact and make the
-# platform boundary explicit to the analyzer with runtime guards instead of suppressing CA1416.
+# platform boundary explicit to the analyzer without suppressing CA1416.
 $pipeFactory = Join-Path $Root 'src/DKLock.Infrastructure/NamedPipeSecurityFactory.cs'
 if (-not (Test-Path $pipeFactory)) { throw "Missing V7 pipe ACL source: $pipeFactory" }
 $text = Get-Content $pipeFactory -Raw
 if ($text -match '#pragma\s+warning\s+(disable|restore)\s+CA1416') {
     throw 'V7 pipe ACL source unexpectedly contains a CA1416 suppression.'
 }
+
+# Public entry point rejects non-Windows execution. This keeps the factory contract explicit while
+# allowing analyzer flow analysis to prove calls to the Windows-only helper are guarded.
 $pipeGuardMarker = '// V7: Named Pipe ACL construction is Windows-only.'
 if ($text -notmatch [regex]::Escape($pipeGuardMarker)) {
     $methodPattern = '(?ms)(public\s+static\s+PipeSecurity\s+BuildSecurity\s*\([^)]*\)\s*\{)'
@@ -22,22 +25,36 @@ if ($text -notmatch [regex]::Escape($pipeGuardMarker)) {
     }, 1)
 }
 
-# The ACL add operation lives in a helper. CA1416 flow analysis is intra-procedural here, so place
-# an explicit Windows guard in the same method immediately before PipeSecurity/PipeAccessRule use.
-$aclApiGuardMarker = '// V7: analyzer guard for Windows-only PipeSecurity/PipeAccessRule APIs.'
-if ($text -notmatch [regex]::Escape($aclApiGuardMarker)) {
-    $aclCallPattern = '(?m)^(?<indent>[ \t]*)(?<call>[^\r\n]*\.AddAccessRule\(new PipeAccessRule\([^\r\n]*AccessControlType\.Allow[^\r\n]*\);[ \t]*)$'
-    $aclMatches = [regex]::Matches($text, $aclCallPattern)
-    if ($aclMatches.Count -lt 1) { throw 'Windows-only PipeSecurity.AddAccessRule call site not found.' }
-    $text = [regex]::Replace($text, $aclCallPattern, {
-        param($match)
-        $indent = $match.Groups['indent'].Value
-        $call = $match.Groups['call'].Value
-        $indent + $aclApiGuardMarker + "`r`n" +
-        $indent + 'if (!OperatingSystem.IsWindows())' + "`r`n" +
-        $indent + '    throw new System.PlatformNotSupportedException("DK LOCK Named Pipe ACL security is supported only on Windows.");' + "`r`n" +
-        $indent + $call
-    })
+# The actual PipeSecurity/PipeAccessRule call lives in a private helper (expression-bodied in the
+# validated V6 baseline). Mark that helper Windows-only rather than inserting statements into its
+# expression body. Locate the declaration structurally by scanning backward from the API call.
+$platformAttribute = '[System.Runtime.Versioning.SupportedOSPlatform("windows")]'
+if ($text -notmatch [regex]::Escape($platformAttribute)) {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in ($text -split "`r?`n")) { [void]$lines.Add($line) }
+
+    $callIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '\.AddAccessRule\s*\(\s*new\s+PipeAccessRule\s*\(' -and
+            $lines[$i] -match 'AccessControlType\.Allow') {
+            $callIndex = $i
+            break
+        }
+    }
+    if ($callIndex -lt 0) { throw 'Windows-only PipeSecurity.AddAccessRule call site not found.' }
+
+    $declarationIndex = -1
+    for ($i = $callIndex; $i -ge 0; $i--) {
+        if ($lines[$i] -match '^(?<indent>[ \t]*)(?:private|internal|public)\s+static\s+[^=;]+\([^;]*$') {
+            $declarationIndex = $i
+            break
+        }
+    }
+    if ($declarationIndex -lt 0) { throw 'Windows-only pipe ACL helper declaration not found.' }
+
+    $indent = ([regex]::Match($lines[$declarationIndex], '^[ \t]*')).Value
+    $lines.Insert($declarationIndex, $indent + $platformAttribute)
+    $text = [string]::Join("`r`n", $lines)
 }
 Set-Content $pipeFactory $text -Encoding utf8
 
@@ -217,4 +234,4 @@ foreach ($pair in $replacements.GetEnumerator()) {
 if ($test -match '(?m)^\s*& \$setup\s') { throw 'A V7 setup gate still uses the non-waiting native call operator.' }
 Set-Content $testPath $test -Encoding utf8
 
-Write-Host 'Applied V7 production fixes: analyzer-safe Windows pipe ACL guards, setup imports, SCM shutdown safety, synchronous elevation, strict payload/setup integrity, deterministic Setup E2E waits.'
+Write-Host 'Applied V7 production fixes: explicit Windows pipe ACL platform contract, setup imports, SCM shutdown safety, synchronous elevation, strict payload/setup integrity, deterministic Setup E2E waits.'
