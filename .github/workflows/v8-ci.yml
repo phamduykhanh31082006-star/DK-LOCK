@@ -118,10 +118,15 @@ jobs:
           [IO.File]::WriteAllBytes('v8delta.tar.xz', [Convert]::FromBase64String($b64))
           $actual = (Get-FileHash 'v8delta.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "V8 delta SHA256: $actual"
-          if ($actual -ne '332ba3db873e5231e87756f4d109ba2af5f8212a0602b2ad6c5ce6d48a31229f') { throw "V8 SHA mismatch: $actual" }
+          if ($actual -ne 'd47d07bbb45951741058d88b9576a76c13d9df629ef175ee4b1130da596216a9') { throw "V8 SHA mismatch: $actual" }
           tar -xf 'v8delta.tar.xz' -C 'ci-extract/DK_LOCK_V8'
-          & 'ci/v8-patches/apply-v8-parser-fix.ps1' -Root 'ci-extract/DK_LOCK_V8'
-          if (-not (Test-Path 'ci-extract/DK_LOCK_V8/scripts/test-v8.ps1')) { throw 'V8 candidate reconstruction failed.' }
+          if (-not (Test-Path 'ci-extract/DK_LOCK_V8/scripts/test-v8.ps1')) { throw 'V8 locked source reconstruction failed.' }
+          $status = Get-Content 'ci-extract/DK_LOCK_V8/V8_WORK_STATUS.md' -Raw
+          if ($status -notmatch '8\.0\.0 / COMPLETED / LOCKED') { throw 'V8 source is not marked COMPLETED / LOCKED.' }
+          foreach ($project in @('ci-extract/DK_LOCK_V8/src/DKLock.App/DKLock.App.csproj','ci-extract/DK_LOCK_V8/tools/DKLock.Setup/DKLock.Setup.csproj')) {
+            if ((Get-Content $project -Raw) -notmatch 'WithCulture="false"') { throw "V8 culture-neutral resource packaging is missing: $project" }
+          }
+          if ((Get-Content 'ci-extract/DK_LOCK_V8/scripts/test-v8.ps1' -Raw).Contains('for $language:')) { throw 'V8 localized smoke-test parser regression detected.' }
 
       - name: Run all V8 bilingual production release gates
         shell: pwsh
