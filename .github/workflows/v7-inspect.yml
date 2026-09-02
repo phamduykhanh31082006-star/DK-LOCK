@@ -1,0 +1,24 @@
+name: DK LOCK V7 Inspector
+
+on:
+  push:
+    branches: [ "v7-production-release" ]
+    paths: [ "ci/v7-inspect-trigger.txt" ]
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract V7 delta and print installer/test sources
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path inspect -Force | Out-Null
+          $parts = Get-ChildItem 'ci/v7delta.part*' | Sort-Object Name
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v7delta.tar.xz', [Convert]::FromBase64String($b64))
+          tar -xf v7delta.tar.xz -C inspect
+          foreach ($p in @('tools/DKLock.Setup/InstallerEngine.cs','tools/DKLock.Setup/SetupOptions.cs','tools/DKLock.Setup/App.xaml.cs','scripts/test-v7.ps1','tests/DKLock.V7.ContractTests/Program.cs')) {
+            Write-Host "===== $p ====="
+            Get-Content (Join-Path 'inspect' $p)
+          }
