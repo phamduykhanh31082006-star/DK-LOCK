@@ -70,8 +70,9 @@ if ($installer -notmatch 'private static void ClearDirectory\(') {
     $installer = $installer.Replace($marker, $helper + $marker)
 }
 
-# Preserve exact SCM diagnostics when a repaired service starts but never reaches RUNNING. Silent
-# setup evidence will record this exception message without changing production behavior.
+# Preserve exact SCM diagnostics and recent .NET/Application crash events when a repaired service
+# starts but never reaches RUNNING. This is emitted only through the CI evidence hook already
+# guarded by DKLOCK_V7_EVIDENCE_DIR; normal production behavior and release gates are unchanged.
 $startPattern = '(?ms)    private async Task StartServiceAsync\(bool ignoreFailure = false\).*?(?=\r?\n    private async Task StopServiceAsync\(\))'
 $startMatch = [regex]::Match($installer, $startPattern)
 if (-not $startMatch.Success) { throw 'V7 StartServiceAsync method not found.' }
@@ -92,13 +93,17 @@ if ($startMethod -notmatch 'ProcessResult\? lastQuery') {
         {
             var startDetail = result.Combined.Trim();
             var queryDetail = lastQuery?.Combined.Trim() ?? "no service query result";
-            throw new InvalidOperationException($"Windows protection service did not reach RUNNING state. sc-start-exit={result.ExitCode}; sc-start={startDetail}; last-query={queryDetail}");
+            var eventResult = await ProcessRunner.RunAsync(
+                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                "$cutoff=(Get-Date).AddMinutes(-3); Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=$cutoff} -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -in @('.NET Runtime','Application Error','Windows Error Reporting') -or $_.Message -like '*DKLock.Service*' } | Select-Object -First 12 TimeCreated,ProviderName,Id,LevelDisplayName,Message | Format-List | Out-String -Width 4096");
+            var eventDetail = eventResult.Combined.Trim();
+            throw new InvalidOperationException($"Windows protection service did not reach RUNNING state. sc-start-exit={result.ExitCode}; sc-start={startDetail}; last-query={queryDetail}; recent-events={eventDetail}");
         }
 '@
     $startMethod = $startMethod.Replace($failureLine, $failureBlock.TrimEnd())
     $installer = $installer.Remove($startMatch.Index, $startMatch.Length).Insert($startMatch.Index, $startMethod)
 }
-if ($installer -notmatch 'sc-start-exit=') { throw 'V7 SCM start diagnostics were not applied.' }
+if ($installer -notmatch 'recent-events=') { throw 'V7 service crash event diagnostics were not applied.' }
 
 # Guardrails: the repair path must no longer rename InstallRoot, the rollback snapshot must be
 # outside Program Files, and strict post-install payload verification from the prior V7 fix remains.
@@ -137,4 +142,4 @@ if ($validator -notmatch 'dklock-v7-rollback-' -or $validator -notmatch 'ClearDi
 }
 Set-Content $validatorPath $validator -Encoding utf8
 
-Write-Host 'Applied V7 ACL-safe transactional repair, aligned static assertions, and SCM failure diagnostics.'
+Write-Host 'Applied V7 ACL-safe transactional repair, aligned static assertions, and service crash diagnostics.'
