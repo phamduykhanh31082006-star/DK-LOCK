@@ -1,0 +1,42 @@
+<UserControl x:Class="DKLock.App.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Settings" Style="{StaticResource TitleText}"/>
+        <TextBlock Text="Manage authentication, Smart Protection and automatic locking. Active unlock sessions remain memory-only." Style="{StaticResource SecondaryText}" Margin="0,6,0,24"/>
+        <Border Style="{StaticResource CardBorder}">
+            <StackPanel>
+                <TextBlock Text="Smart Protection" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding SmartProtectionStatus}" Style="{StaticResource SecondaryText}" Margin="0,8,0,14" TextWrapping="Wrap"/>
+                <CheckBox Content="Enable automatic Smart Protection" IsChecked="{Binding SmartProtectionEnabled}" Margin="0,0,0,12"/>
+                <Grid Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Idle auto-lock timeout" VerticalAlignment="Center"/>
+                    <ComboBox Grid.Column="1" ItemsSource="{Binding IdleTimeoutOptions}" SelectedItem="{Binding IdleTimeoutMinutes}" MinWidth="150" Style="{StaticResource SecureComboBox}" ItemContainerStyle="{StaticResource SecureComboBoxItem}"/>
+                    <TextBlock Grid.Column="2" Text="minutes · 0 = Off" Style="{StaticResource SecondaryText}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                </Grid>
+                <CheckBox Content="Lock when Windows workstation locks" IsChecked="{Binding LockOnWorkstationLock}" Margin="0,0,0,8"/>
+                <CheckBox Content="Lock when suspend/sleep is signaled" IsChecked="{Binding LockOnSuspend}" Margin="0,0,0,14"/>
+                <Button Content="Save Smart Protection" Command="{Binding SaveSmartProtectionCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"/>
+            </StackPanel>
+        </Border>
+        <Border Style="{StaticResource CardBorder}" Margin="0,12,0,0">
+            <StackPanel>
+                <TextBlock Text="Authentication" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding CredentialStatus}" Style="{StaticResource SecondaryText}" Margin="0,8,0,16"/>
+                <WrapPanel>
+                    <Button Content="Configure PIN" Command="{Binding ConfigurePinCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>
+                    <Button Content="Clear PIN" Command="{Binding ClearPinCommand}" Style="{StaticResource SecondaryButton}" Margin="0,0,8,8"/>
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource SecondaryButton}" Margin="0,0,8,8"/>
+                </WrapPanel>
+            </StackPanel>
+        </Border>
+        <Border Style="{StaticResource CardBorder}" Margin="0,12,0,0">
+            <StackPanel>
+                <TextBlock Text="Unlock sessions" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock Text="Application and folder unlock sessions are scoped, RAM-only and cleared by Quick Lock, Auto Lock and service restart." Style="{StaticResource SecondaryText}" Margin="0,8,0,16"/>
+                <Button Content="Clear all sessions now" Command="{Binding ClearSessionsCommand}" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"/>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>
