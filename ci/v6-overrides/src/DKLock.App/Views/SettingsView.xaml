@@ -12,7 +12,13 @@
                 <Grid Margin="0,0,0,10">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                     <TextBlock Text="Idle auto-lock timeout" VerticalAlignment="Center"/>
-                    <ComboBox Grid.Column="1" ItemsSource="{Binding IdleTimeoutOptions}" SelectedItem="{Binding IdleTimeoutMinutes}" MinWidth="150" Style="{StaticResource SecureComboBox}" ItemContainerStyle="{StaticResource SecureComboBoxItem}"/>
+                    <ComboBox Grid.Column="1" ItemsSource="{Binding IdleTimeoutOptions}" SelectedItem="{Binding IdleTimeoutMinutes}" MinWidth="150" Style="{StaticResource SecureComboBox}" ItemContainerStyle="{StaticResource SecureComboBoxItem}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" Foreground="#111827"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
                     <TextBlock Grid.Column="2" Text="minutes · 0 = Off" Style="{StaticResource SecondaryText}" VerticalAlignment="Center" Margin="10,0,0,0"/>
                 </Grid>
                 <CheckBox Content="Lock when Windows workstation locks" IsChecked="{Binding LockOnWorkstationLock}" Margin="0,0,0,8"/>
