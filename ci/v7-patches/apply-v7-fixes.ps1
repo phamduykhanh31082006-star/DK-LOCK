@@ -4,11 +4,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 1) V7 production named-pipe ACL APIs are intentionally Windows-only.
 $pipeFactory = Join-Path $Root 'src/DKLock.Infrastructure/NamedPipeSecurityFactory.cs'
-if (-not (Test-Path $pipeFactory)) {
-    throw "V7 patch target not found: $pipeFactory"
-}
-
+if (-not (Test-Path $pipeFactory)) { throw "V7 patch target not found: $pipeFactory" }
 $content = Get-Content $pipeFactory -Raw
 if ($content -notmatch '#pragma warning disable CA1416') {
     $reason = '// V7: this factory is intentionally Windows-only because production named-pipe ACLs use Windows access-control APIs.'
@@ -16,6 +14,7 @@ if ($content -notmatch '#pragma warning disable CA1416') {
     Set-Content -Path $pipeFactory -Value $content -Encoding utf8
 }
 
+# 2) V7 setup files use Path/File/Directory APIs explicitly.
 $setupFiles = @(
     'tools/DKLock.Setup/InstallerEngine.cs',
     'tools/DKLock.Setup/App.xaml.cs',
@@ -23,13 +22,9 @@ $setupFiles = @(
     'tools/DKLock.Setup/SetupOptions.cs',
     'tools/DKLock.Setup/SetupSmoke.cs'
 )
-
 foreach ($relative in $setupFiles) {
     $path = Join-Path $Root $relative
-    if (-not (Test-Path $path)) {
-        throw "V7 setup patch target not found: $path"
-    }
-
+    if (-not (Test-Path $path)) { throw "V7 setup patch target not found: $path" }
     $text = Get-Content $path -Raw
     if ($text -notmatch '(?m)^using System\.IO;\s*$') {
         $text = "using System.IO;`r`n" + $text
@@ -37,11 +32,9 @@ foreach ($relative in $setupFiles) {
     }
 }
 
+# 3) SCM/production mode must always override any test-only shutdown environment flag.
 $serviceOptions = Join-Path $Root 'src/DKLock.Service/ServiceOptions.cs'
-if (-not (Test-Path $serviceOptions)) {
-    throw "V7 service-options patch target not found: $serviceOptions"
-}
-
+if (-not (Test-Path $serviceOptions)) { throw "V7 service-options patch target not found: $serviceOptions" }
 $serviceText = Get-Content $serviceOptions -Raw
 $marker = '// V7 production service safety: never expose the test-shutdown endpoint from SCM mode.'
 if ($serviceText -notmatch [regex]::Escape($marker)) {
@@ -60,52 +53,44 @@ if ($serviceText -notmatch [regex]::Escape($marker)) {
         }
 
 "@
-    $pattern = '(?m)^(\s*)return new ServiceOptions\('
-    if ($serviceText -notmatch $pattern) {
-        throw 'Could not locate ServiceOptions return expression for production shutdown safety patch.'
-    }
-    $serviceText = [regex]::Replace($serviceText, $pattern, { param($m) $guard + $m.Groups[1].Value + 'return new ServiceOptions(' }, 1)
+    $returnPattern = '(?m)^(\s*)return new ServiceOptions\('
+    if ($serviceText -notmatch $returnPattern) { throw 'Could not locate ServiceOptions return expression.' }
+    $serviceText = [regex]::Replace($serviceText, $returnPattern, { param($m) $guard + $m.Groups[1].Value + 'return new ServiceOptions(' }, 1)
     Set-Content -Path $serviceOptions -Value $serviceText -Encoding utf8
 }
 
+# 4) An unelevated setup parent must wait for the elevated child and propagate its exit code.
+# Otherwise silent automation/user scripts can observe exit 0 while installation is still running.
 $appPath = Join-Path $Root 'tools/DKLock.Setup/App.xaml.cs'
 $appText = Get-Content $appPath -Raw
-$oldElevation = @"
-                SetupElevation.RelaunchElevated(options, e.Args);
-                Shutdown(0);
-                return;
-"@
-$newElevation = @"
-                var elevatedExitCode = SetupElevation.RelaunchElevated(options, e.Args);
-                Shutdown(elevatedExitCode);
-                return;
-"@
-if ($appText.Contains($oldElevation)) {
-    $appText = $appText.Replace($oldElevation, $newElevation)
-}
-elseif ($appText -notmatch 'var elevatedExitCode = SetupElevation\.RelaunchElevated') {
-    throw 'Could not patch V7 setup elevation exit-code propagation.'
+if ($appText -notmatch 'var elevatedExitCode = SetupElevation\.RelaunchElevated') {
+    $elevationPattern = '(?m)^[ \t]*SetupElevation\.RelaunchElevated\(options, e\.Args\);\r?\n[ \t]*Shutdown\(0\);\r?\n[ \t]*return;'
+    if ($appText -notmatch $elevationPattern) { throw 'Could not locate V7 setup elevation startup block.' }
+    $elevationReplacement = "                var elevatedExitCode = SetupElevation.RelaunchElevated(options, e.Args);`r`n                Shutdown(elevatedExitCode);`r`n                return;"
+    $appText = [regex]::Replace($appText, $elevationPattern, $elevationReplacement, 1)
 }
 
-$appText = $appText.Replace(
-    'public static void RelaunchElevated(SetupOptions options, string[] originalArgs)',
-    'public static int RelaunchElevated(SetupOptions options, string[] originalArgs)')
-
-$oldElevatedStart = '        Start(Environment.ProcessPath!, args, elevate: true);'
-$newElevatedStart = '        return StartAndWait(Environment.ProcessPath!, args, elevate: true);'
-if ($appText.Contains($oldElevatedStart)) {
-    $appText = $appText.Replace($oldElevatedStart, $newElevatedStart)
+if ($appText -match 'public static void RelaunchElevated\(SetupOptions options, string\[\] originalArgs\)') {
+    $appText = [regex]::Replace(
+        $appText,
+        'public static void RelaunchElevated\(SetupOptions options, string\[\] originalArgs\)',
+        'public static int RelaunchElevated(SetupOptions options, string[] originalArgs)',
+        1)
 }
-elseif ($appText -notmatch 'return StartAndWait\(Environment\.ProcessPath!, args, elevate: true\);') {
-    throw 'Could not patch V7 elevated setup wait behavior.'
+elseif ($appText -notmatch 'public static int RelaunchElevated\(SetupOptions options, string\[\] originalArgs\)') {
+    throw 'Could not locate V7 RelaunchElevated signature.'
+}
+
+if ($appText -notmatch 'return StartAndWait\(Environment\.ProcessPath!, args, elevate: true\);') {
+    $elevatedStartPattern = '(?m)^[ \t]*Start\(Environment\.ProcessPath!, args, elevate: true\);'
+    if ($appText -notmatch $elevatedStartPattern) { throw 'Could not locate V7 elevated child launch.' }
+    $appText = [regex]::Replace($appText, $elevatedStartPattern, '        return StartAndWait(Environment.ProcessPath!, args, elevate: true);', 1)
 }
 
 if ($appText -notmatch 'private static int StartAndWait\(') {
     $startMarker = '    private static void Start(string executable, IEnumerable<string> args, bool elevate)'
-    if (-not $appText.Contains($startMarker)) {
-        throw 'Could not locate V7 setup Start helper.'
-    }
-    $waitHelper = @"
+    if (-not $appText.Contains($startMarker)) { throw 'Could not locate V7 setup Start helper.' }
+    $waitHelper = @'
     private static int StartAndWait(string executable, IEnumerable<string> args, bool elevate)
     {
         var psi = new ProcessStartInfo(executable)
@@ -119,26 +104,26 @@ if ($appText -notmatch 'private static int StartAndWait\(') {
         return process.ExitCode;
     }
 
-"@
+'@
     $appText = $appText.Replace($startMarker, $waitHelper + $startMarker)
 }
 Set-Content -Path $appPath -Value $appText -Encoding utf8
 
+# 5) The embedded payload manifest cannot contain a hash of the setup EXE that embeds that manifest.
+# Keep payload file-set verification strict, permit exactly the root setup EXE only for installed-directory
+# verification, and hash-compare that copy against the currently executing setup binary.
 $installerPath = Join-Path $Root 'tools/DKLock.Setup/InstallerEngine.cs'
 $installerText = Get-Content $installerPath -Raw
 $installerText = $installerText.Replace('PayloadIntegrity.VerifyDirectory(_options.InstallRoot);', 'VerifyInstalledDirectory(_options.InstallRoot);')
 
 if ($installerText -notmatch 'private static void VerifyInstalledDirectory\(') {
     $quoteMarker = '    private static string Quote(string value)'
-    if (-not $installerText.Contains($quoteMarker)) {
-        throw 'Could not locate V7 installer Quote helper.'
-    }
-    $installedVerify = @"
+    if (-not $installerText.Contains($quoteMarker)) { throw 'Could not locate V7 installer Quote helper.' }
+    $installedVerify = @'
     private static void VerifyInstalledDirectory(string root)
     {
-        // The installer is copied next to the payload after the payload manifest is built, so it cannot hash itself.
-        // Keep payload verification strict while permitting exactly this one root-level setup file, then verify that
-        // setup copy independently against the currently running release executable.
+        // The setup executable embeds the payload manifest, so its own hash cannot be part of that manifest.
+        // Permit only this root-level file as an extra, then verify the copied setup independently.
         const string setupName = "DK_LOCK_V7_Setup.exe";
         PayloadIntegrity.VerifyDirectory(root, setupName);
 
@@ -154,46 +139,39 @@ if ($installerText -notmatch 'private static void VerifyInstalledDirectory\(') {
             throw new InvalidDataException("Installed setup executable integrity verification failed.");
     }
 
-"@
+'@
     $installerText = $installerText.Replace($quoteMarker, $installedVerify + $quoteMarker)
 }
 
-$oldSignature = '    public static void VerifyDirectory(string root)'
-$newSignature = '    public static void VerifyDirectory(string root, params string[] allowedExtraFiles)'
-if ($installerText.Contains($oldSignature)) {
-    $installerText = $installerText.Replace($oldSignature, $newSignature)
+if ($installerText -match 'public static void VerifyDirectory\(string root\)') {
+    $installerText = [regex]::Replace(
+        $installerText,
+        'public static void VerifyDirectory\(string root\)',
+        'public static void VerifyDirectory(string root, params string[] allowedExtraFiles)',
+        1)
 }
 elseif ($installerText -notmatch 'public static void VerifyDirectory\(string root, params string\[\] allowedExtraFiles\)') {
-    throw 'Could not patch V7 payload verification signature.'
+    throw 'Could not locate V7 payload VerifyDirectory signature.'
 }
 
-$oldSetCheck = @"
-        var expectedFiles = expected.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (!actualFiles.SetEquals(expectedFiles))
-        {
-            var unexpected = actualFiles.Except(expectedFiles).FirstOrDefault();
-            var missing = expectedFiles.Except(actualFiles).FirstOrDefault();
-            throw new InvalidDataException($"Payload file set mismatch. unexpected={unexpected ?? "none"}; missing={missing ?? "none"}");
-        }
-"@
-$newSetCheck = @"
-        var expectedFiles = expected.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var allowedExtras = allowedExtraFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var unexpected = actualFiles.Except(expectedFiles).Except(allowedExtras).FirstOrDefault();
-        var missing = expectedFiles.Except(actualFiles).FirstOrDefault();
-        if (unexpected is not null || missing is not null)
-            throw new InvalidDataException($"Payload file set mismatch. unexpected={unexpected ?? "none"}; missing={missing ?? "none"}");
-"@
-if ($installerText.Contains($oldSetCheck)) {
-    $installerText = $installerText.Replace($oldSetCheck, $newSetCheck)
-}
-elseif ($installerText -notmatch 'allowedExtras = allowedExtraFiles\.ToHashSet') {
-    throw 'Could not patch V7 allowed setup-file integrity logic.'
+if ($installerText -notmatch 'allowedExtras = allowedExtraFiles\.ToHashSet') {
+    $expectedLine = '        var expectedFiles = expected.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);'
+    if (-not $installerText.Contains($expectedLine)) { throw 'Could not locate V7 expectedFiles line.' }
+    $newExpectedLines = $expectedLine + "`r`n        var allowedExtras = allowedExtraFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);"
+    $installerText = $installerText.Replace($expectedLine, $newExpectedLines)
+
+    $setEqualsLine = '        if (!actualFiles.SetEquals(expectedFiles))'
+    if (-not $installerText.Contains($setEqualsLine)) { throw 'Could not locate V7 payload file-set check.' }
+    $newCondition = "        var unexpected = actualFiles.Except(expectedFiles).Except(allowedExtras).FirstOrDefault();`r`n        var missing = expectedFiles.Except(actualFiles).FirstOrDefault();`r`n        if (unexpected is not null || missing is not null)"
+    $installerText = $installerText.Replace($setEqualsLine, $newCondition)
+
+    # Remove the now-duplicated declarations that were inside the original mismatch block.
+    $installerText = [regex]::Replace($installerText, '(?m)^[ \t]+var unexpected = actualFiles\.Except\(expectedFiles\)\.FirstOrDefault\(\);\r?\n', '', 1)
+    $installerText = [regex]::Replace($installerText, '(?m)^[ \t]+var missing = expectedFiles\.Except\(actualFiles\)\.FirstOrDefault\(\);\r?\n', '', 1)
 }
 
-if (($installerText | Select-String -Pattern 'VerifyInstalledDirectory\(_options\.InstallRoot\);' -AllMatches).Matches.Count -lt 2) {
-    throw 'Expected both V7 installed-directory integrity checks to use VerifyInstalledDirectory.'
-}
+$verifyCount = ([regex]::Matches($installerText, 'VerifyInstalledDirectory\(_options\.InstallRoot\);')).Count
+if ($verifyCount -lt 2) { throw "Expected both installed-directory checks to be patched; found $verifyCount." }
 Set-Content -Path $installerPath -Value $installerText -Encoding utf8
 
 Write-Host 'Applied V7 Windows-only named-pipe ACL analyzer annotation patch.'
