@@ -4,12 +4,22 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Named-pipe ACL implementation is intentionally Windows-only in production.
+# Named-pipe ACL construction is Windows-only. Keep the ACL implementation intact and make the
+# platform boundary explicit to the analyzer with a runtime guard instead of suppressing CA1416.
 $pipeFactory = Join-Path $Root 'src/DKLock.Infrastructure/NamedPipeSecurityFactory.cs'
 if (-not (Test-Path $pipeFactory)) { throw "Missing V7 pipe ACL source: $pipeFactory" }
 $text = Get-Content $pipeFactory -Raw
-if ($text -notmatch '#pragma warning disable CA1416') {
-    $text = "#pragma warning disable CA1416`r`n// V7: production pipe ACL code is intentionally Windows-only.`r`n" + $text.TrimEnd() + "`r`n#pragma warning restore CA1416`r`n"
+if ($text -match '#pragma\s+warning\s+(disable|restore)\s+CA1416') {
+    throw 'V7 pipe ACL source unexpectedly contains a CA1416 suppression.'
+}
+$pipeGuardMarker = '// V7: Named Pipe ACL construction is Windows-only.'
+if ($text -notmatch [regex]::Escape($pipeGuardMarker)) {
+    $methodPattern = '(?ms)(public\s+static\s+PipeSecurity\s+BuildSecurity\s*\([^)]*\)\s*\{)'
+    if ($text -notmatch $methodPattern) { throw 'NamedPipeSecurityFactory.BuildSecurity method not found.' }
+    $text = [regex]::Replace($text, $methodPattern, {
+        param($match)
+        $match.Groups[1].Value + "`r`n        $pipeGuardMarker`r`n        if (!OperatingSystem.IsWindows())`r`n            throw new System.PlatformNotSupportedException(`"DK LOCK Named Pipe ACL security is supported only on Windows.`");"
+    }, 1)
     Set-Content $pipeFactory $text -Encoding utf8
 }
 
@@ -140,4 +150,53 @@ if ($installer -notmatch 'if \(!actualFiles\.SetEquals\(expectedFiles\)\)') { th
 if ($installer -match 'allowedExtraFiles|allowedExtras') { throw 'Payload validator was unexpectedly relaxed.' }
 Set-Content $installerPath $installer -Encoding utf8
 
-Write-Host 'Applied V7 production fixes: Windows ACL annotation, setup imports, SCM shutdown safety, synchronous elevation, strict payload/setup integrity.'
+# PowerShell does not provide reliable wait/exit-code semantics for a Windows GUI executable when
+# invoked with the native call operator. V7 install/repair/uninstall gates must wait for the exact
+# Setup process to finish before examining Program Files, ProgramData, SCM, or registry state.
+$testPath = Join-Path $Root 'scripts/test-v7.ps1'
+if (-not (Test-Path $testPath)) { throw "Missing V7 release gate script: $testPath" }
+$test = Get-Content $testPath -Raw
+$setupProcessMarker = 'function Invoke-V7SetupProcess'
+if ($test -notmatch [regex]::Escape($setupProcessMarker)) {
+    $insertAfter = '(?m)^Set-Location \$root\r?\n'
+    if ($test -notmatch $insertAfter) { throw 'V7 test Set-Location marker not found.' }
+    $processHelper = @'
+
+function Invoke-V7SetupProcess([string]$FilePath, [string[]]$Arguments) {
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $FilePath
+    $psi.UseShellExecute = $false
+    foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
+    $process = [System.Diagnostics.Process]::Start($psi)
+    if ($null -eq $process) { throw "Unable to start V7 setup process: $FilePath" }
+    try {
+        $process.WaitForExit()
+        return $process.ExitCode
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+'@
+    $test = [regex]::Replace($test, $insertAfter, { param($m) $m.Value + $processHelper + "`r`n" }, 1)
+}
+
+$replacements = [ordered]@{
+    '& $setup --verify-only' = '$setupExit = Invoke-V7SetupProcess -FilePath $setup -Arguments @(''--verify-only'')'
+    'if ($LASTEXITCODE -ne 0) { throw "Final setup embedded integrity verification failed." }' = 'if ($setupExit -ne 0) { throw "Final setup embedded integrity verification failed: $setupExit" }'
+    '& $setup --silent @commonArgs' = '$setupExit = Invoke-V7SetupProcess -FilePath $setup -Arguments (@(''--silent'') + $commonArgs)'
+    'if ($LASTEXITCODE -ne 0) { throw "V7 silent installation failed: $LASTEXITCODE" }' = 'if ($setupExit -ne 0) { throw "V7 silent installation failed: $setupExit" }'
+    'if ($LASTEXITCODE -ne 0) { throw "V7 repair failed: $LASTEXITCODE" }' = 'if ($setupExit -ne 0) { throw "V7 repair failed: $setupExit" }'
+    '& $setup --silent --uninstall @commonArgs' = '$setupExit = Invoke-V7SetupProcess -FilePath $setup -Arguments (@(''--silent'',''--uninstall'') + $commonArgs)'
+    'if ($LASTEXITCODE -ne 0) { throw "V7 uninstall failed: $LASTEXITCODE" }' = 'if ($setupExit -ne 0) { throw "V7 uninstall failed: $setupExit" }'
+    '& $setup --silent --uninstall --purge-data @commonArgs' = '$setupExit = Invoke-V7SetupProcess -FilePath $setup -Arguments (@(''--silent'',''--uninstall'',''--purge-data'') + $commonArgs)'
+    'if ($LASTEXITCODE -ne 0) { throw "V7 purge cleanup failed: $LASTEXITCODE" }' = 'if ($setupExit -ne 0) { throw "V7 purge cleanup failed: $setupExit" }'
+}
+foreach ($pair in $replacements.GetEnumerator()) {
+    if (-not $test.Contains($pair.Key)) { throw "Expected V7 setup gate invocation not found: $($pair.Key)" }
+    $test = $test.Replace($pair.Key, $pair.Value)
+}
+if ($test -match '(?m)^\s*& \$setup\s') { throw 'A V7 setup gate still uses the non-waiting native call operator.' }
+Set-Content $testPath $test -Encoding utf8
+
+Write-Host 'Applied V7 production fixes: analyzer-safe Windows pipe ACL guard, setup imports, SCM shutdown safety, synchronous elevation, strict payload/setup integrity, deterministic Setup E2E waits.'
