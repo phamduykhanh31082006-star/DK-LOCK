@@ -74,6 +74,19 @@ if ($test -notmatch 'Database ACL missing SID after repair') {
     $test = $test.Replace($marker, $marker + "`r`n" + $aclAssertion.TrimEnd())
 }
 if ($test -notmatch 'Database ACL missing SID after repair') { throw 'V7 Gate 11 database ACL assertion was not applied.' }
+
+# A deliberately non-zero native command is used earlier to prove that the SCM service no longer
+# exists after uninstall. PowerShell can retain that native LASTEXITCODE even after every gate has
+# passed. Return success explicitly only after the final PASS marker has been reached; any earlier
+# throw or failed gate still terminates the script as failure.
+$successMarker = 'Write-Host "=== ALL DK LOCK V7 PRODUCTION RELEASE GATES PASS ==="'
+if (-not $test.Contains($successMarker)) { throw 'V7 final success marker not found.' }
+if ($test -notmatch '(?ms)Write-Host "=== ALL DK LOCK V7 PRODUCTION RELEASE GATES PASS ==="\s*\r?\n\s*exit 0') {
+    $test = $test.Replace($successMarker, $successMarker + "`r`nexit 0")
+}
+if ($test -notmatch '(?ms)Write-Host "=== ALL DK LOCK V7 PRODUCTION RELEASE GATES PASS ==="\s*\r?\n\s*exit 0') {
+    throw 'V7 release gate explicit success exit was not applied.'
+}
 Set-Content $testPath $test -Encoding utf8
 
-Write-Host 'Applied V7 ProgramData descendant ACL repair fix and Gate 11 database ACL verification.'
+Write-Host 'Applied V7 ProgramData descendant ACL repair fix, Gate 11 database ACL verification, and deterministic final success exit.'
