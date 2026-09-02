@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Named-pipe ACL construction is Windows-only. Keep the ACL implementation intact and make the
-# platform boundary explicit to the analyzer with a runtime guard instead of suppressing CA1416.
+# platform boundary explicit to the analyzer with runtime guards instead of suppressing CA1416.
 $pipeFactory = Join-Path $Root 'src/DKLock.Infrastructure/NamedPipeSecurityFactory.cs'
 if (-not (Test-Path $pipeFactory)) { throw "Missing V7 pipe ACL source: $pipeFactory" }
 $text = Get-Content $pipeFactory -Raw
@@ -20,8 +20,26 @@ if ($text -notmatch [regex]::Escape($pipeGuardMarker)) {
         param($match)
         $match.Groups[1].Value + "`r`n        $pipeGuardMarker`r`n        if (!OperatingSystem.IsWindows())`r`n            throw new System.PlatformNotSupportedException(`"DK LOCK Named Pipe ACL security is supported only on Windows.`");"
     }, 1)
-    Set-Content $pipeFactory $text -Encoding utf8
 }
+
+# The ACL add operation lives in a helper. CA1416 flow analysis is intra-procedural here, so place
+# an explicit Windows guard in the same method immediately before PipeSecurity/PipeAccessRule use.
+$aclApiGuardMarker = '// V7: analyzer guard for Windows-only PipeSecurity/PipeAccessRule APIs.'
+if ($text -notmatch [regex]::Escape($aclApiGuardMarker)) {
+    $aclCallPattern = '(?m)^(?<indent>[ \t]*)(?<call>[^\r\n]*\.AddAccessRule\(new PipeAccessRule\([^\r\n]*AccessControlType\.Allow[^\r\n]*\);[ \t]*)$'
+    $aclMatches = [regex]::Matches($text, $aclCallPattern)
+    if ($aclMatches.Count -lt 1) { throw 'Windows-only PipeSecurity.AddAccessRule call site not found.' }
+    $text = [regex]::Replace($text, $aclCallPattern, {
+        param($match)
+        $indent = $match.Groups['indent'].Value
+        $call = $match.Groups['call'].Value
+        $indent + $aclApiGuardMarker + "`r`n" +
+        $indent + 'if (!OperatingSystem.IsWindows())' + "`r`n" +
+        $indent + '    throw new System.PlatformNotSupportedException("DK LOCK Named Pipe ACL security is supported only on Windows.");' + "`r`n" +
+        $indent + $call
+    })
+}
+Set-Content $pipeFactory $text -Encoding utf8
 
 # Setup sources explicitly use System.IO APIs.
 foreach ($relative in @(
@@ -199,4 +217,4 @@ foreach ($pair in $replacements.GetEnumerator()) {
 if ($test -match '(?m)^\s*& \$setup\s') { throw 'A V7 setup gate still uses the non-waiting native call operator.' }
 Set-Content $testPath $test -Encoding utf8
 
-Write-Host 'Applied V7 production fixes: analyzer-safe Windows pipe ACL guard, setup imports, SCM shutdown safety, synchronous elevation, strict payload/setup integrity, deterministic Setup E2E waits.'
+Write-Host 'Applied V7 production fixes: analyzer-safe Windows pipe ACL guards, setup imports, SCM shutdown safety, synchronous elevation, strict payload/setup integrity, deterministic Setup E2E waits.'
