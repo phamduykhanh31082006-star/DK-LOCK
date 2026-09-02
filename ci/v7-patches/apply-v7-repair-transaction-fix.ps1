@@ -70,9 +70,9 @@ if ($installer -notmatch 'private static void ClearDirectory\(') {
     $installer = $installer.Replace($marker, $helper + $marker)
 }
 
-# Preserve exact SCM diagnostics and recent .NET/Application crash events when a repaired service
-# starts but never reaches RUNNING. This is emitted only through the CI evidence hook already
-# guarded by DKLOCK_V7_EVIDENCE_DIR; normal production behavior and release gates are unchanged.
+# Preserve exact SCM diagnostics, recent crash events, configured DB path, and ProgramData ACL state
+# when a repaired service starts but never reaches RUNNING. This diagnostic data is emitted only via
+# the CI evidence hook guarded by DKLOCK_V7_EVIDENCE_DIR.
 $startPattern = '(?ms)    private async Task StartServiceAsync\(bool ignoreFailure = false\).*?(?=\r?\n    private async Task StopServiceAsync\(\))'
 $startMatch = [regex]::Match($installer, $startPattern)
 if (-not $startMatch.Success) { throw 'V7 StartServiceAsync method not found.' }
@@ -93,17 +93,24 @@ if ($startMethod -notmatch 'ProcessResult\? lastQuery') {
         {
             var startDetail = result.Combined.Trim();
             var queryDetail = lastQuery?.Combined.Trim() ?? "no service query result";
+            var qcResult = await ProcessRunner.RunAsync("sc.exe", "qc", _options.ServiceName);
+            var dbPath = Path.Combine(_options.DataRoot, "dklock.db");
+            var dataAcl = await ProcessRunner.RunAsync("icacls.exe", _options.DataRoot);
+            var dbAcl = File.Exists(dbPath)
+                ? await ProcessRunner.RunAsync("icacls.exe", dbPath)
+                : new ProcessResult(-1, "database file missing", string.Empty);
+            var dbState = $"data-root={_options.DataRoot}; data-root-exists={Directory.Exists(_options.DataRoot)}; db={dbPath}; db-exists={File.Exists(dbPath)}; db-bytes={(File.Exists(dbPath) ? new FileInfo(dbPath).Length : -1)}";
             var eventResult = await ProcessRunner.RunAsync(
                 "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                 "$cutoff=(Get-Date).AddMinutes(-3); Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=$cutoff} -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -in @('.NET Runtime','Application Error','Windows Error Reporting') -or $_.Message -like '*DKLock.Service*' } | Select-Object -First 12 TimeCreated,ProviderName,Id,LevelDisplayName,Message | Format-List | Out-String -Width 4096");
             var eventDetail = eventResult.Combined.Trim();
-            throw new InvalidOperationException($"Windows protection service did not reach RUNNING state. sc-start-exit={result.ExitCode}; sc-start={startDetail}; last-query={queryDetail}; recent-events={eventDetail}");
+            throw new InvalidOperationException($"Windows protection service did not reach RUNNING state. sc-start-exit={result.ExitCode}; sc-start={startDetail}; last-query={queryDetail}; sc-qc={qcResult.Combined.Trim()}; db-state={dbState}; data-acl={dataAcl.Combined.Trim()}; db-acl={dbAcl.Combined.Trim()}; recent-events={eventDetail}");
         }
 '@
     $startMethod = $startMethod.Replace($failureLine, $failureBlock.TrimEnd())
     $installer = $installer.Remove($startMatch.Index, $startMatch.Length).Insert($startMatch.Index, $startMethod)
 }
-if ($installer -notmatch 'recent-events=') { throw 'V7 service crash event diagnostics were not applied.' }
+if ($installer -notmatch 'db-state=') { throw 'V7 repair DB/ACL diagnostics were not applied.' }
 
 # Guardrails: the repair path must no longer rename InstallRoot, the rollback snapshot must be
 # outside Program Files, and strict post-install payload verification from the prior V7 fix remains.
@@ -142,4 +149,4 @@ if ($validator -notmatch 'dklock-v7-rollback-' -or $validator -notmatch 'ClearDi
 }
 Set-Content $validatorPath $validator -Encoding utf8
 
-Write-Host 'Applied V7 ACL-safe transactional repair, aligned static assertions, and service crash diagnostics.'
+Write-Host 'Applied V7 ACL-safe transactional repair, aligned static assertions, and DB/ACL crash diagnostics.'
