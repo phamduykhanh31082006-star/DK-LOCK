@@ -106,6 +106,7 @@ jobs:
           tar -xf 'v7delta.tar.xz' -C 'ci-extract/DK_LOCK_V7'
           & 'ci/v7-patches/apply-v7-fixes.ps1' -Root 'ci-extract/DK_LOCK_V7'
           & 'ci/v7-patches/apply-v7-repair-transaction-fix.ps1' -Root 'ci-extract/DK_LOCK_V7'
+          & 'ci/v7-patches/apply-v7-data-acl-fix.ps1' -Root 'ci-extract/DK_LOCK_V7'
           if (-not (Test-Path 'ci-extract/DK_LOCK_V7/scripts/test-v7.ps1')) { throw 'V7 candidate reconstruction failed.' }
 
       - name: Run all V7 production release gates
