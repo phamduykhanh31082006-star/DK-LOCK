@@ -89,4 +89,33 @@ if ($test -notmatch '(?ms)Write-Host "=== ALL DK LOCK V7 PRODUCTION RELEASE GATE
 }
 Set-Content $testPath $test -Encoding utf8
 
-Write-Host 'Applied V7 ProgramData descendant ACL repair fix, Gate 11 database ACL verification, and deterministic final success exit.'
+# Finalize source-facing V7 status. These files are only published by the workflow after the full
+# V7 release gate succeeds, so the tested source artifact cannot claim LOCKED on a failing run.
+$statusPath = Join-Path $Root 'V7_WORK_STATUS.md'
+if (-not (Test-Path $statusPath)) { throw 'Missing V7_WORK_STATUS.md.' }
+$status = Get-Content $statusPath -Raw
+if (-not $status.Contains('Current stage: **7.0.0-rc / PRODUCTIONIZATION**')) { throw 'Expected V7 RC status marker not found.' }
+$status = $status.Replace('Current stage: **7.0.0-rc / PRODUCTIONIZATION**', 'Current stage: **7.0.0 / COMPLETED / LOCKED**')
+$status = $status.Replace('V7 may be labeled complete only after the locked V7 Definition of Done passes.', 'V7 is complete and locked when the exact source commit passes the locked V7 Definition of Done and release artifacts are emitted successfully.')
+Set-Content $statusPath $status -Encoding utf8
+
+$reportPath = Join-Path $Root 'report/V7_REPORT.md'
+if (-not (Test-Path $reportPath)) { throw 'Missing V7_REPORT.md.' }
+$report = Get-Content $reportPath -Raw
+if (-not $report.Contains('Status: release candidate until the V7 Windows production release pipeline passes.')) { throw 'Expected V7 report RC marker not found.' }
+$report = $report.Replace('Status: release candidate until the V7 Windows production release pipeline passes.', 'Status: COMPLETED / LOCKED — final Windows production release pipeline PASS required on the published source artifact.')
+$report = $report.Replace('This report is finalized by the release handoff only after the exact installer artifact passes install/repair/uninstall and integrity gates.', 'Release acceptance requires the exact installer artifact to pass install, production SCM startup, IPC/WPF smoke, repair with encrypted-data preservation, uninstall-preserve, explicit purge, ACL, SHA-256 payload integrity, metadata, and runtime-evidence gates.')
+Set-Content $reportPath $report -Encoding utf8
+
+$changePath = Join-Path $Root 'CHANGELOG.md'
+if (-not (Test-Path $changePath)) { throw 'Missing CHANGELOG.md.' }
+$change = Get-Content $changePath -Raw
+if (-not $change.Contains('## 7.0.0-rc — Production Release')) { throw 'Expected V7 changelog RC marker not found.' }
+$change = $change.Replace('## 7.0.0-rc — Production Release', '## 7.0.0 — Production Release (released)')
+Set-Content $changePath $change -Encoding utf8
+
+if ((Get-Content $statusPath -Raw) -notmatch '7\.0\.0 / COMPLETED / LOCKED') { throw 'V7 final work status was not applied.' }
+if ((Get-Content $reportPath -Raw) -notmatch 'Status: COMPLETED / LOCKED') { throw 'V7 final report status was not applied.' }
+if ((Get-Content $changePath -Raw) -notmatch '## 7\.0\.0 — Production Release \(released\)') { throw 'V7 final changelog status was not applied.' }
+
+Write-Host 'Applied V7 ProgramData ACL repair, deterministic release exit, and final COMPLETED/LOCKED source status.'
