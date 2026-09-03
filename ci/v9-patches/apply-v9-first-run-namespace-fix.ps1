@@ -30,17 +30,15 @@ $content = [regex]::Replace(
 )
 
 # UI Automation Invoke is asynchronous with respect to the WPF dispatcher.
-# The V9 release gate must still exercise the real Button -> ICommand ->
-# IPC/Service path, but it must not inspect command state before the click has
-# actually been dispatched. Apply the same ApplicationIdle synchronization to
-# every real functional E2E click so Applications/Folders/Documents/Accounts/
-# Settings/Quick Lock are tested consistently instead of patching one button at
-# a time.
-$methodToken = 'private static async Task<int> RunV9FunctionalUiE2EAsync'
-$methodStart = $content.IndexOf($methodToken, [System.StringComparison]::Ordinal)
-if ($methodStart -lt 0) { throw 'V9 functional UI E2E method was not found.' }
+# Keep the real Button -> ICommand -> IPC/Service path, but wait until each
+# click has actually been dispatched before evaluating its async result.
+$nameToken = 'RunV9FunctionalUiE2EAsync('
+$nameIndex = $content.IndexOf($nameToken, [System.StringComparison]::Ordinal)
+if ($nameIndex -lt 0) { throw 'V9 functional UI E2E method name was not found.' }
+$lineBreak = $content.LastIndexOf("`n", $nameIndex)
+$methodStart = if ($lineBreak -ge 0) { $lineBreak + 1 } else { 0 }
 $helperToken = 'private static Button RequireButton'
-$helperStart = $content.IndexOf($helperToken, $methodStart, [System.StringComparison]::Ordinal)
+$helperStart = $content.IndexOf($helperToken, $nameIndex, [System.StringComparison]::Ordinal)
 if ($helperStart -lt 0) { throw 'V9 functional UI E2E helper boundary was not found.' }
 
 $prefix = $content.Substring(0, $methodStart)
@@ -51,10 +49,6 @@ $rebuilt = New-Object System.Collections.Generic.List[string]
 $invokeCount = 0
 for ($i = 0; $i -lt $sourceLines.Count; $i++) {
     $line = $sourceLines[$i]
-
-    # Remove an older per-button synchronization line if this patch already
-    # added one immediately after an InvokeButton call; it will be recreated
-    # uniformly below.
     if ($line -match '^\s*await window\.Dispatcher\.InvokeAsync\(\(\) => \{ \}, DispatcherPriority\.ApplicationIdle\);\s*$' -and
         $rebuilt.Count -gt 0 -and $rebuilt[$rebuilt.Count - 1] -match '^\s*InvokeButton\(') {
         continue
