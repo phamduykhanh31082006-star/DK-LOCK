@@ -42,6 +42,10 @@ jobs:
           $status = Get-Content 'ci-extract/DK_LOCK_V9/V9_WORK_STATUS.md' -Raw
           if ($status -notmatch 'NOT LOCKED / NOT RELEASED') { throw 'V9 RC source status is not candidate state.' }
 
+      - name: Apply V9 RC integration fixes
+        shell: pwsh
+        run: ./ci/v9-patches/apply-v9-first-run-namespace-fix.ps1 -Root 'ci-extract/DK_LOCK_V9'
+
       - name: Run all V9 functional product release gates
         shell: pwsh
         working-directory: ci-extract/DK_LOCK_V9
