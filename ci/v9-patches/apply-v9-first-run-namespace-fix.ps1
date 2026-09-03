@@ -40,9 +40,6 @@ if ($content -notmatch [regex]::Escape($usingLine)) {
     $content = $prefix.TrimEnd() + "`r`n$usingLine`r`n`r`n" + $suffix
 }
 
-# The modal onboarding smoke deliberately schedules an async UI driver before
-# ShowDialog. Capture the DispatcherOperation explicitly so warnings-as-errors
-# does not treat the scheduling call as an accidental unawaited operation.
 $content = [regex]::Replace(
     $content,
     '(?m)^(?<indent>\s*)onboarding\.Dispatcher\.BeginInvoke\(',
@@ -63,3 +60,16 @@ if ($updated -notmatch '(?m)^\s*_\s*=\s*onboarding\.Dispatcher\.BeginInvoke\(') 
 }
 
 Write-Host "Applied V9 FirstRunSetupWindow integration fixes: namespace=$namespace; modal driver scheduling captured."
+
+$lines = Get-Content $smokePath
+$needle = 'Add application UI command persists a protection policy'
+$hit = Select-String -Path $smokePath -SimpleMatch $needle | Select-Object -First 1
+if ($null -ne $hit) {
+    Write-Host '--- V9 functional Application UI E2E source diagnostic ---'
+    $start = [Math]::Max(0, $hit.LineNumber - 18)
+    $end = [Math]::Min($lines.Count - 1, $hit.LineNumber + 10)
+    for ($i = $start; $i -le $end; $i++) {
+        Write-Host ('{0,4}: {1}' -f ($i + 1), $lines[$i])
+    }
+    Write-Host '--- end V9 functional Application UI E2E source diagnostic ---'
+}
