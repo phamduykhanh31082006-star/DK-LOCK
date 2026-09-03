@@ -40,17 +40,26 @@ if ($content -notmatch [regex]::Escape($usingLine)) {
     $content = $prefix.TrimEnd() + "`r`n$usingLine`r`n`r`n" + $suffix
 }
 
+# The modal onboarding smoke deliberately schedules an async UI driver before
+# ShowDialog. Capture the DispatcherOperation explicitly so warnings-as-errors
+# does not treat the scheduling call as an accidental unawaited operation.
+$content = [regex]::Replace(
+    $content,
+    '(?m)^(?<indent>\s*)onboarding\.Dispatcher\.BeginInvoke\(',
+    '${indent}_ = onboarding.Dispatcher.BeginInvoke('
+)
+
 Set-Content -Path $smokePath -Value $content -Encoding utf8
 
 $updated = Get-Content $smokePath -Raw
 if ($updated -notmatch [regex]::Escape($usingLine)) {
     throw "Failed to import FirstRunSetupWindow namespace: $namespace"
 }
-
-Write-Host "Applied V9 FirstRunSetupWindow namespace fix: $namespace"
-Write-Host '--- SmokeTestRunner onboarding diagnostic lines 508-526 ---'
-$lines = Get-Content $smokePath
-for ($i = 507; $i -le 525 -and $i -lt $lines.Count; $i++) {
-    Write-Host ('{0,4}: {1}' -f ($i + 1), $lines[$i])
+if ($updated -match '(?m)^\s*onboarding\.Dispatcher\.BeginInvoke\(') {
+    throw 'Uncaptured onboarding Dispatcher.BeginInvoke remains.'
 }
-Write-Host '--- end onboarding diagnostic ---'
+if ($updated -notmatch '(?m)^\s*_\s*=\s*onboarding\.Dispatcher\.BeginInvoke\(') {
+    throw 'Onboarding Dispatcher.BeginInvoke scheduling fix was not applied.'
+}
+
+Write-Host "Applied V9 FirstRunSetupWindow integration fixes: namespace=$namespace; modal driver scheduling captured."
