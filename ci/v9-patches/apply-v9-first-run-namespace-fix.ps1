@@ -29,25 +29,46 @@ $content = [regex]::Replace(
     '${indent}_ = onboarding.Dispatcher.BeginInvoke('
 )
 
-# Ensure the real UI Automation click has been dispatched before testing the
-# resulting asynchronous command state. This keeps the path Button -> ICommand
-# -> IPC/Service intact and removes only the E2E driver's event-queue race.
-if ($content -notmatch 'InvokeButton\(refreshApplications\);\s*await window\.Dispatcher\.InvokeAsync\(\(\) => \{ \}, DispatcherPriority\.ApplicationIdle\);') {
-    $content = [regex]::Replace(
-        $content,
-        '(?m)^(?<indent>\s*)InvokeButton\(refreshApplications\);\s*$',
-        '${indent}InvokeButton(refreshApplications);' + "`r`n" + '${indent}await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);',
-        1
-    )
+# UI Automation Invoke is asynchronous with respect to the WPF dispatcher.
+# The V9 release gate must still exercise the real Button -> ICommand ->
+# IPC/Service path, but it must not inspect command state before the click has
+# actually been dispatched. Apply the same ApplicationIdle synchronization to
+# every real functional E2E click so Applications/Folders/Documents/Accounts/
+# Settings/Quick Lock are tested consistently instead of patching one button at
+# a time.
+$methodToken = 'private static async Task<int> RunV9FunctionalUiE2EAsync'
+$methodStart = $content.IndexOf($methodToken, [System.StringComparison]::Ordinal)
+if ($methodStart -lt 0) { throw 'V9 functional UI E2E method was not found.' }
+$helperToken = 'private static Button RequireButton'
+$helperStart = $content.IndexOf($helperToken, $methodStart, [System.StringComparison]::Ordinal)
+if ($helperStart -lt 0) { throw 'V9 functional UI E2E helper boundary was not found.' }
+
+$prefix = $content.Substring(0, $methodStart)
+$functional = $content.Substring($methodStart, $helperStart - $methodStart)
+$suffix = $content.Substring($helperStart)
+$sourceLines = [regex]::Split($functional, '\r?\n')
+$rebuilt = New-Object System.Collections.Generic.List[string]
+$invokeCount = 0
+for ($i = 0; $i -lt $sourceLines.Count; $i++) {
+    $line = $sourceLines[$i]
+
+    # Remove an older per-button synchronization line if this patch already
+    # added one immediately after an InvokeButton call; it will be recreated
+    # uniformly below.
+    if ($line -match '^\s*await window\.Dispatcher\.InvokeAsync\(\(\) => \{ \}, DispatcherPriority\.ApplicationIdle\);\s*$' -and
+        $rebuilt.Count -gt 0 -and $rebuilt[$rebuilt.Count - 1] -match '^\s*InvokeButton\(') {
+        continue
+    }
+
+    $rebuilt.Add($line)
+    if ($line -match '^(?<indent>\s*)InvokeButton\([^;]+\);\s*$') {
+        $indent = $Matches['indent']
+        $rebuilt.Add($indent + 'await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);')
+        $invokeCount++
+    }
 }
-if ($content -notmatch 'InvokeButton\(addApplication\);\s*await window\.Dispatcher\.InvokeAsync\(\(\) => \{ \}, DispatcherPriority\.ApplicationIdle\);') {
-    $content = [regex]::Replace(
-        $content,
-        '(?m)^(?<indent>\s*)InvokeButton\(addApplication\);\s*$',
-        '${indent}InvokeButton(addApplication);' + "`r`n" + '${indent}await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);',
-        1
-    )
-}
+if ($invokeCount -lt 6) { throw "Expected multiple V9 functional UI Automation clicks, synchronized only $invokeCount." }
+$content = $prefix + ($rebuilt -join "`r`n") + $suffix
 
 if ($content -notmatch 'DIAG_APPLICATION_AFTER_CLICK') {
     $assertPattern = '(?m)^(?<indent>\s*)Require\(await WaitUntilAsync\(\(\) => applications\.Applications\.Count == 1, TimeSpan\.FromSeconds\(8\)\), "Add application UI command persists a protection policy", lines\);\s*$'
@@ -68,8 +89,8 @@ $updated = Get-Content $smokePath -Raw
 if ($updated -notmatch [regex]::Escape($usingLine)) { throw 'Failed to import FirstRunSetupWindow namespace.' }
 if ($updated -match '(?m)^\s*onboarding\.Dispatcher\.BeginInvoke\(') { throw 'Uncaptured onboarding Dispatcher.BeginInvoke remains.' }
 if ($updated -notmatch '(?m)^\s*_\s*=\s*onboarding\.Dispatcher\.BeginInvoke\(') { throw 'Onboarding Dispatcher.BeginInvoke scheduling fix was not applied.' }
-if ($updated -notmatch 'InvokeButton\(refreshApplications\);\s*await window\.Dispatcher\.InvokeAsync\(\(\) => \{ \}, DispatcherPriority\.ApplicationIdle\);') { throw 'Refresh UI Automation dispatcher synchronization was not applied.' }
-if ($updated -notmatch 'InvokeButton\(addApplication\);\s*await window\.Dispatcher\.InvokeAsync\(\(\) => \{ \}, DispatcherPriority\.ApplicationIdle\);') { throw 'Add UI Automation dispatcher synchronization was not applied.' }
+$syncCount = ([regex]::Matches($updated, 'await window\.Dispatcher\.InvokeAsync\(\(\) => \{ \}, DispatcherPriority\.ApplicationIdle\);')).Count
+if ($syncCount -lt $invokeCount) { throw "V9 functional UI dispatcher synchronization count mismatch: invokes=$invokeCount sync=$syncCount" }
 if ($updated -notmatch 'DIAG_APPLICATION_AFTER_CLICK') { throw 'V9 Add Application failure diagnostic is missing.' }
 
-Write-Host 'Applied V9 integration fixes: onboarding namespace, modal scheduling capture, and real UI Automation dispatcher synchronization for Application Refresh/Add.'
+Write-Host "Applied V9 integration fixes: onboarding namespace, modal scheduling capture, and dispatcher synchronization for all $invokeCount real functional UI Automation clicks."
