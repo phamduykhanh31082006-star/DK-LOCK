@@ -34,21 +34,23 @@ if ($content.Contains($old)) {
 }
 Set-Content $smokePath $content -Encoding utf8
 
-function Print-Hit([string]$Path,[string]$Pattern,[int]$Before=15,[int]$After=70) {
-    $hits = Select-String -Path $Path -Pattern $Pattern
-    foreach ($hit in $hits) {
-        $lines = Get-Content $hit.Path
-        $start=[Math]::Max(0,$hit.LineNumber-1-$Before); $end=[Math]::Min($lines.Count-1,$hit.LineNumber-1+$After)
-        Write-Host "--- $($hit.Path) line $($hit.LineNumber) :: $Pattern ---"
-        for($i=$start;$i -le $end;$i++){ Write-Host ('{0,4}: {1}' -f ($i+1),$lines[$i]) }
+function Print-Contexts([System.IO.FileInfo[]]$Files,[string]$Pattern,[int]$Before=15,[int]$After=70) {
+    foreach ($file in $Files) {
+        $hits = Select-String -LiteralPath $file.FullName -Pattern $Pattern
+        foreach ($hit in $hits) {
+            $lines = Get-Content -LiteralPath $file.FullName
+            $start=[Math]::Max(0,$hit.LineNumber-1-$Before); $end=[Math]::Min($lines.Count-1,$hit.LineNumber-1+$After)
+            Write-Host "--- $($file.FullName) line $($hit.LineNumber) :: $Pattern ---"
+            for($i=$start;$i -le $end;$i++){ Write-Host ('{0,4}: {1}' -f ($i+1),$lines[$i]) }
+        }
     }
 }
 
-$xamls = Get-ChildItem $appRoot -Recurse -File -Filter '*.xaml'
-$cs = Get-ChildItem $appRoot -Recurse -File -Filter '*.cs'
-Print-Hit -Path $xamls.FullName -Pattern 'AddApplicationButton' -Before 25 -After 35
-Print-Hit -Path $cs.FullName -Pattern 'static\s+void\s+InvokeButton|void\s+InvokeButton' -Before 20 -After 65
-Print-Hit -Path $cs.FullName -Pattern 'class\s+ScriptedV9DialogService' -Before 5 -After 120
-Print-Hit -Path $cs.FullName -Pattern 'class\s+AsyncRelayCommand' -Before 5 -After 120
+$xamls = @(Get-ChildItem $appRoot -Recurse -File -Filter '*.xaml')
+$cs = @(Get-ChildItem $appRoot -Recurse -File -Filter '*.cs')
+Print-Contexts -Files $xamls -Pattern 'AddApplicationButton' -Before 25 -After 35
+Print-Contexts -Files $cs -Pattern 'static\s+void\s+InvokeButton|void\s+InvokeButton' -Before 20 -After 65
+Print-Contexts -Files $cs -Pattern 'class\s+ScriptedV9DialogService' -Before 5 -After 120
+Print-Contexts -Files $cs -Pattern 'class\s+AsyncRelayCommand' -Before 5 -After 120
 Write-Host 'V9 Add Application binding/command diagnostic captured.'
 throw 'V9_DIAGNOSTIC_STOP_AFTER_ADD_BINDING_INSPECTION'
