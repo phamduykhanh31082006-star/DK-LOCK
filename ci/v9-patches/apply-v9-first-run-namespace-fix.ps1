@@ -75,16 +75,28 @@ if ($updated -notmatch 'DIAG_APPLICATION_AFTER_CLICK') {
     throw 'V9 Add Application failure diagnostic was not injected.'
 }
 
-$lines = Get-Content $smokePath
-$hit = Select-String -Path $smokePath -SimpleMatch 'DIAG_APPLICATION_AFTER_CLICK' | Select-Object -First 1
-if ($null -ne $hit) {
-    Write-Host '--- V9 functional smoke context diagnostic ---'
-    $start = [Math]::Max(0, $hit.LineNumber - 38)
-    $end = [Math]::Min($lines.Count - 1, $hit.LineNumber + 8)
-    for ($i = $start; $i -le $end; $i++) {
-        Write-Host ('{0,4}: {1}' -f ($i + 1), $lines[$i])
+function Write-SourceContext {
+    param(
+        [Parameter(Mandatory = $true)][string]$Pattern,
+        [int]$Before = 12,
+        [int]$After = 45
+    )
+
+    $files = Get-ChildItem -Path $appRoot -Recurse -File -Filter '*.cs'
+    $hits = Select-String -Path $files.FullName -Pattern $Pattern | Select-Object -First 4
+    foreach ($sourceHit in $hits) {
+        $sourceLines = Get-Content $sourceHit.Path
+        $start = [Math]::Max(0, $sourceHit.LineNumber - 1 - $Before)
+        $end = [Math]::Min($sourceLines.Count - 1, $sourceHit.LineNumber - 1 + $After)
+        Write-Host "--- SOURCE CONTEXT: $($sourceHit.Path) line $($sourceHit.LineNumber) pattern=$Pattern ---"
+        for ($i = $start; $i -le $end; $i++) {
+            Write-Host ('{0,4}: {1}' -f ($i + 1), $sourceLines[$i])
+        }
+        Write-Host '--- END SOURCE CONTEXT ---'
     }
-    Write-Host '--- end V9 functional smoke context diagnostic ---'
 }
 
-Write-Host "Applied V9 integration fixes: namespace=$namespace; modal driver scheduling captured; Add Application diagnostics compile-safe."
+Write-SourceContext -Pattern 'class\s+ApplicationsViewModel' -Before 5 -After 220
+Write-SourceContext -Pattern 'AddApplicationAsync|AddApplicationCommand|OpenFileDialog|DKLOCK_V9_E2E_APP' -Before 18 -After 70
+
+Write-Host "Applied V9 integration fixes: namespace=$namespace; modal driver scheduling captured; Add Application diagnostics compile-safe; application add source path inspected."
