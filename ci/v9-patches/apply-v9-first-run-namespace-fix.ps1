@@ -38,12 +38,29 @@ if ($content -notmatch [regex]::Escape($usingLine)) {
     $prefix = $content.Substring(0, $insertAt)
     $suffix = $content.Substring($insertAt)
     $content = $prefix.TrimEnd() + "`r`n$usingLine`r`n`r`n" + $suffix
-    Set-Content -Path $smokePath -Value $content -Encoding utf8
 }
+
+# The onboarding smoke opens the dialog on its dispatcher. Warnings are errors,
+# so the dispatcher operation must be awaited instead of fire-and-forget.
+$beforeAwaitFix = $content
+$content = [regex]::Replace(
+    $content,
+    '(?m)^(?<indent>\s*)window\.Dispatcher\.InvokeAsync\(',
+    '${indent}await window.Dispatcher.InvokeAsync('
+)
+
+if ($content -eq $beforeAwaitFix -and $content -match '(?m)^\s*window\.Dispatcher\.InvokeAsync\(') {
+    throw 'Failed to await FirstRunSetupWindow dispatcher invocation.'
+}
+
+Set-Content -Path $smokePath -Value $content -Encoding utf8
 
 $updated = Get-Content $smokePath -Raw
 if ($updated -notmatch [regex]::Escape($usingLine)) {
     throw "Failed to import FirstRunSetupWindow namespace: $namespace"
 }
+if ($updated -match '(?m)^\s*window\.Dispatcher\.InvokeAsync\(') {
+    throw 'Unawaited FirstRunSetupWindow dispatcher invocation remains.'
+}
 
-Write-Host "Applied V9 FirstRunSetupWindow namespace fix: $namespace"
+Write-Host "Applied V9 FirstRunSetupWindow integration fixes: namespace=$namespace; dispatcher awaited."
