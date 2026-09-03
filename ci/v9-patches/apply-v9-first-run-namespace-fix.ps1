@@ -7,8 +7,10 @@ $ErrorActionPreference = 'Stop'
 
 $appRoot = Join-Path $Root 'src/DKLock.App'
 $smokePath = Join-Path $appRoot 'Smoke/SmokeTestRunner.cs'
+$testV9Path = Join-Path $Root 'scripts/test-v9.ps1'
 
 if (-not (Test-Path $smokePath)) { throw "V9 SmokeTestRunner not found: $smokePath" }
+if (-not (Test-Path $testV9Path)) { throw "V9 release gate script not found: $testV9Path" }
 
 $firstRunXaml = Get-ChildItem -Path $appRoot -Recurse -File -Filter 'FirstRunSetupWindow.xaml' | Select-Object -First 1
 if ($null -eq $firstRunXaml) { throw 'V9 FirstRunSetupWindow.xaml was not found in DKLock.App.' }
@@ -48,20 +50,20 @@ if ($updated -match '(?m)^\s*onboarding\.Dispatcher\.BeginInvoke\(') { throw 'Un
 if ($updated -notmatch '(?m)^\s*_\s*=\s*onboarding\.Dispatcher\.BeginInvoke\(') { throw 'Onboarding Dispatcher.BeginInvoke scheduling fix was not applied.' }
 if ($updated -notmatch 'DIAG_APPLICATION_AFTER_CLICK') { throw 'V9 Add Application failure diagnostic was not injected.' }
 
-function Write-SourceContext {
-    param([Parameter(Mandatory = $true)][string]$Pattern, [int]$Before = 12, [int]$After = 80, [int]$MaxHits = 8)
-    $files = Get-ChildItem -Path $appRoot -Recurse -File -Filter '*.cs'
-    $hits = Select-String -Path $files.FullName -Pattern $Pattern | Select-Object -First $MaxHits
-    foreach ($sourceHit in $hits) {
-        $sourceLines = Get-Content $sourceHit.Path
-        $start = [Math]::Max(0, $sourceHit.LineNumber - 1 - $Before)
-        $end = [Math]::Min($sourceLines.Count - 1, $sourceHit.LineNumber - 1 + $After)
-        Write-Host "--- SOURCE CONTEXT: $($sourceHit.Path) line $($sourceHit.LineNumber) pattern=$Pattern ---"
-        for ($i = $start; $i -le $end; $i++) { Write-Host ('{0,4}: {1}' -f ($i + 1), $sourceLines[$i]) }
-        Write-Host '--- END SOURCE CONTEXT ---'
+$gateLines = Get-Content $testV9Path
+$patterns = @('--v9-functional-ui-e2e', 'DKLOCK_V9_E2E_APP', '\[12/22\]')
+$printed = New-Object 'System.Collections.Generic.HashSet[int]'
+foreach ($pattern in $patterns) {
+    $hits = Select-String -Path $testV9Path -Pattern $pattern
+    foreach ($hit in $hits) {
+        $start = [Math]::Max(0, $hit.LineNumber - 25)
+        $end = [Math]::Min($gateLines.Count - 1, $hit.LineNumber + 35)
+        Write-Host "--- test-v9.ps1 context for $pattern at line $($hit.LineNumber) ---"
+        for ($i = $start; $i -le $end; $i++) {
+            if ($printed.Add($i)) { Write-Host ('{0,4}: {1}' -f ($i + 1), $gateLines[$i]) }
+        }
     }
 }
 
-Write-SourceContext -Pattern 'ScriptedV9DialogService|new\s+WpfDialogService|IAppDialogService|RunV9FunctionalUiE2EAsync|FUNCTIONAL_UI|SMOKE' -Before 25 -After 120 -MaxHits 12
-Write-Host 'V9 E2E dialog wiring diagnostic captured; stopping this diagnostic run before expensive release gates.'
-throw 'V9_DIAGNOSTIC_STOP_AFTER_DIALOG_WIRING_INSPECTION'
+Write-Host 'V9 Gate 12 environment/launch diagnostic captured; stopping before expensive release gates.'
+throw 'V9_DIAGNOSTIC_STOP_AFTER_GATE12_LAUNCH_INSPECTION'
