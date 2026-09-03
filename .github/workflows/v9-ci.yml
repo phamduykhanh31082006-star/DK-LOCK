@@ -1,0 +1,91 @@
+name: DK LOCK V9 Functional Product Release Candidate Gate
+
+on:
+  push:
+    branches: [ "v9-functional-productization" ]
+  workflow_dispatch:
+
+jobs:
+  v9-functional-release-candidate:
+    runs-on: windows-latest
+    timeout-minutes: 210
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rehydrate exact locked V8 baseline
+        shell: pwsh
+        run: ./ci/rehydrate-v8-for-v9.ps1
+
+      - name: Apply V9 functional product release candidate delta
+        shell: pwsh
+        run: |
+          Move-Item 'ci-extract/DK_LOCK_V8' 'ci-extract/DK_LOCK_V9'
+          $v9 = Get-ChildItem 'ci/v9rc.part*' | Sort-Object Name
+          if ($v9.Count -ne 8) { throw "Expected 8 V9 RC delta parts, found $($v9.Count)." }
+          $b64 = ($v9 | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v9rcdelta.tar.xz', [Convert]::FromBase64String($b64))
+          $actual = (Get-FileHash 'v9rcdelta.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "V9 RC delta SHA256: $actual"
+          if ($actual -ne 'b6ca1016e4825c8054802783932a2a19b5017572ae6bf240bdc681c1640de513') { throw "V9 RC SHA mismatch: $actual" }
+          tar -xf 'v9rcdelta.tar.xz' -C 'ci-extract/DK_LOCK_V9'
+          if (-not (Test-Path 'ci-extract/DK_LOCK_V9/scripts/test-v9.ps1')) { throw 'V9 RC reconstruction failed.' }
+          $status = Get-Content 'ci-extract/DK_LOCK_V9/V9_WORK_STATUS.md' -Raw
+          if ($status -notmatch 'NOT LOCKED / NOT RELEASED') { throw 'V9 RC source status is not candidate state.' }
+
+      - name: Run all V9 functional product release gates
+        shell: pwsh
+        working-directory: ci-extract/DK_LOCK_V9
+        run: ./scripts/test-v9.ps1
+
+      - name: Upload V9 RC runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v9-rc-runtime-evidence
+          path: |
+            ci-extract/DK_LOCK_V9/report/runtime/V9_*.txt
+            ci-extract/DK_LOCK_V9/report/runtime/V9_*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload exact V9 RC end-user release
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v9-rc-end-user-release
+          path: ci-extract/DK_LOCK_V9/artifacts/DK_LOCK_V9_RELEASE
+          retention-days: 14
+
+      - name: Upload exact V9 RC user installer ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v9-rc-user-installer
+          path: ci-extract/DK_LOCK_V9/artifacts/DK_LOCK_V9_RELEASE/DK_LOCK_V9_USER_INSTALLER.zip
+          retention-days: 14
+
+      - name: Clean tested V9 RC source candidate
+        if: success()
+        shell: pwsh
+        run: |
+          if (Test-Path 'ci-extract/DK_LOCK_V9/artifacts') { Remove-Item 'ci-extract/DK_LOCK_V9/artifacts' -Recurse -Force }
+          if (Test-Path 'ci-extract/DK_LOCK_V9/tools/DKLock.Setup/Payload/dklock-payload.zip') { Remove-Item 'ci-extract/DK_LOCK_V9/tools/DKLock.Setup/Payload/dklock-payload.zip' -Force }
+          Get-ChildItem 'ci-extract/DK_LOCK_V9' -Directory -Recurse | Where-Object { $_.Name -in @('bin','obj','__pycache__') } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force
+
+      - name: Upload clean tested V9 RC source candidate
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v9-rc-tested-source
+          path: ci-extract/DK_LOCK_V9
+          retention-days: 14
