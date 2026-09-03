@@ -46,6 +46,20 @@ $content = [regex]::Replace(
     '${indent}_ = onboarding.Dispatcher.BeginInvoke('
 )
 
+$oldApplicationAssertion = '            Require(await WaitUntilAsync(() => applications.Applications.Count == 1, TimeSpan.FromSeconds(8)), "Add application UI command persists a protection policy", lines);'
+if ($content.Contains($oldApplicationAssertion)) {
+    $newApplicationAssertion = @'
+            var applicationAdded = await WaitUntilAsync(() => applications.Applications.Count == 1, TimeSpan.FromSeconds(8));
+            if (!applicationAdded)
+            {
+                var applicationSnapshot = await connection.GetApplicationsAsync();
+                lines.Add($"DIAG_APPLICATION_AFTER_CLICK: Busy={applications.Busy}; VmCount={applications.Applications.Count}; Status={applications.StatusMessage}; ServiceSuccess={applicationSnapshot.Success}; ServiceCount={applicationSnapshot.Items.Count}; ServiceMessage={applicationSnapshot.Message}");
+            }
+            Require(applicationAdded, "Add application UI command persists a protection policy", lines);
+'@
+    $content = $content.Replace($oldApplicationAssertion, $newApplicationAssertion.TrimEnd())
+}
+
 Set-Content -Path $smokePath -Value $content -Encoding utf8
 
 $updated = Get-Content $smokePath -Raw
@@ -58,18 +72,8 @@ if ($updated -match '(?m)^\s*onboarding\.Dispatcher\.BeginInvoke\(') {
 if ($updated -notmatch '(?m)^\s*_\s*=\s*onboarding\.Dispatcher\.BeginInvoke\(') {
     throw 'Onboarding Dispatcher.BeginInvoke scheduling fix was not applied.'
 }
-
-Write-Host "Applied V9 FirstRunSetupWindow integration fixes: namespace=$namespace; modal driver scheduling captured."
-
-$lines = Get-Content $smokePath
-$needle = 'Add application UI command persists a protection policy'
-$hit = Select-String -Path $smokePath -SimpleMatch $needle | Select-Object -First 1
-if ($null -ne $hit) {
-    Write-Host '--- V9 functional Application UI E2E source diagnostic ---'
-    $start = [Math]::Max(0, $hit.LineNumber - 18)
-    $end = [Math]::Min($lines.Count - 1, $hit.LineNumber + 10)
-    for ($i = $start; $i -le $end; $i++) {
-        Write-Host ('{0,4}: {1}' -f ($i + 1), $lines[$i])
-    }
-    Write-Host '--- end V9 functional Application UI E2E source diagnostic ---'
+if ($updated -notmatch 'DIAG_APPLICATION_AFTER_CLICK') {
+    throw 'V9 Add Application failure diagnostic was not injected.'
 }
+
+Write-Host "Applied V9 integration fixes: namespace=$namespace; modal driver scheduling captured; Add Application failure diagnostics enabled."
