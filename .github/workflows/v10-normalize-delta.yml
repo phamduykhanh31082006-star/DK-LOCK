@@ -1,0 +1,92 @@
+name: DK LOCK V10 Normalize Exact Delta
+
+on:
+  push:
+    branches: [ "v10-application-locker-refocus" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dk-lock-v10-normalize
+  cancel-in-progress: true
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct current 26-file V10 candidate and apply deterministic fixes
+        shell: pwsh
+        run: |
+          $parts = @(Get-ChildItem 'ci/v10rc.part*' | Sort-Object Name)
+          if ($parts.Count -ne 5) { throw "Expected 5 V10 carrier parts, found $($parts.Count)." }
+          $raw = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v10-pre-fix.tar.xz', [Convert]::FromBase64String($raw))
+          $preHash = (Get-FileHash 'v10-pre-fix.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($preHash -ne '647b9d75568716e5f361a9a86ca8c88264ebadec296f0bfc6ce330908c4fe90d') { throw "Unexpected pre-fix V10 delta SHA: $preHash" }
+          New-Item -ItemType Directory -Path 'v10-candidate' -Force | Out-Null
+          tar -xf 'v10-pre-fix.tar.xz' -C 'v10-candidate'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to extract pre-fix V10 delta.' }
+          ./ci/v10-patches/apply-v10-compile-fixes.ps1 -Root 'v10-candidate'
+
+      - name: Build deterministic exact canonical V10 delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > v10-files.txt <<'EOF'
+          .v10-delete-list.json
+          Directory.Build.props
+          VERSION
+          src/DKLock.App/App.xaml.cs
+          src/DKLock.App/MainWindow.xaml
+          src/DKLock.App/Protection/ApplicationLockOverlayWindow.xaml
+          src/DKLock.App/Protection/ApplicationLockOverlayWindow.xaml.cs
+          src/DKLock.App/Protection/ApplicationWindowProtectionAgent.cs
+          src/DKLock.App/Protection/NativeWindowMethods.cs
+          src/DKLock.App/Resources/Strings.en-US.json
+          src/DKLock.App/Resources/Strings.vi-VN.json
+          src/DKLock.App/Services/ServiceConnectionCoordinator.cs
+          src/DKLock.App/ViewModels/DashboardViewModel.cs
+          src/DKLock.App/ViewModels/MainViewModel.cs
+          src/DKLock.App/Views/DashboardView.xaml
+          src/DKLock.Core/IPC/IpcContracts.cs
+          src/DKLock.Core/Protection/ProtectionChallenge.cs
+          src/DKLock.Core/Sessions/UnlockSession.cs
+          src/DKLock.Infrastructure/NamedPipeIpcClient.cs
+          src/DKLock.Security/Protection/ChallengeRegistry.cs
+          src/DKLock.Security/Sessions/InMemorySessionService.cs
+          src/DKLock.Service/DkLockServiceHost.cs
+          src/DKLock.Service/Protection/EnforcementCoordinator.cs
+          src/DKLock.Service/SmartProtection/SmartProtectionCoordinator.cs
+          tools/DKLock.Setup/DKLock.Setup.csproj
+          tools/DKLock.Setup/SetupOptions.cs
+          EOF
+          sed -i 's/^          //' v10-files.txt
+          cd v10-candidate
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -cJf ../v10rcdelta.tar.xz -T ../v10-files.txt
+          cd ..
+          actual="$(sha256sum v10rcdelta.tar.xz | awk '{print $1}')"
+          echo "V10_CANONICAL_DELTA_SHA256=$actual"
+          test "$actual" = "3bd904268a1dc0083e10b3f1ec204388399ac2db4c927593ab602f537bbef010"
+          base64 -w0 v10rcdelta.tar.xz > ci/v10rc.b64
+          printf '%s\n' "$actual" > ci/v10-delta.sha256
+
+      - name: Commit normalized canonical carrier if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- ci/v10rc.b64 ci/v10-delta.sha256; then
+            echo 'Canonical V10 delta already normalized.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ci/v10rc.b64 ci/v10-delta.sha256
+          git commit -m 'V10: normalize exact 26-file application-locker delta'
+          git push origin HEAD:v10-application-locker-refocus
