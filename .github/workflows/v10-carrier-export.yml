@@ -1,0 +1,17 @@
+name: DK LOCK V10 Carrier Recovery Export
+on:
+  push:
+    branches: [ "v10-application-locker-refocus" ]
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v10-carrier-recovery
+          path: |
+            ci/v10rc.b64
+            ci/v10rc.part*
+          if-no-files-found: error
+          retention-days: 1
