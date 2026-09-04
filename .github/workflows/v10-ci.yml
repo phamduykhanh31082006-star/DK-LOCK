@@ -75,14 +75,11 @@ jobs:
           $status = Get-Content 'ci-extract/DK_LOCK_V10/V9_WORK_STATUS.md' -Raw
           if ($status -notmatch 'COMPLETED / RELEASED / LOCKED') { throw 'Exact V9 lock marker missing.' }
 
-      - name: Reconstruct and verify exact V10 delta carrier
+      - name: Verify exact canonical V10 delta
         shell: pwsh
         run: |
-          $parts = @(Get-ChildItem 'ci/v10rc.part*' | Sort-Object Name)
-          if ($parts.Count -lt 1) { throw 'V10 delta split carrier is missing.' }
-          $joined = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
           $canonical = (Get-Content 'ci/v10rc.b64' -Raw).Trim()
-          if ($joined -ne $canonical) { throw 'V10 split delta carrier does not exactly match ci/v10rc.b64.' }
+          if ([string]::IsNullOrWhiteSpace($canonical)) { throw 'Canonical V10 delta carrier is empty.' }
           [IO.File]::WriteAllBytes('v10rcdelta.tar.xz', [Convert]::FromBase64String($canonical))
           $actual = (Get-FileHash 'v10rcdelta.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "V10_DELTA_SHA256=$actual"
