@@ -11,6 +11,7 @@ jobs:
     timeout-minutes: 60
     env:
       PYTHONUTF8: "1"
+      V10_DELTA_SHA256: "647b9d75568716e5f361a9a86ca8c88264ebadec296f0bfc6ce330908c4fe90d"
     steps:
       - uses: actions/checkout@v4
 
@@ -37,21 +38,25 @@ jobs:
           $actual = (Get-FileHash 'v9-source-overlay.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne 'b6ca1016e4825c8054802783932a2a19b5017572ae6bf240bdc681c1640de513') { throw "V9 source overlay SHA mismatch: $actual" }
           tar -xf 'v9-source-overlay.tar.xz' -C 'ci-extract/DK_LOCK_V10'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to extract exact V9 overlay.' }
           ./ci/v9-patches/apply-v9-first-run-namespace-fix.ps1 -Root 'ci-extract/DK_LOCK_V10'
           $version = (Get-Content 'ci-extract/DK_LOCK_V10/VERSION' -Raw).Trim()
           if ($version -ne '9.0.0') { throw "Exact V9 baseline version mismatch: $version" }
           $status = Get-Content 'ci-extract/DK_LOCK_V10/V9_WORK_STATUS.md' -Raw
           if ($status -notmatch 'COMPLETED / RELEASED / LOCKED') { throw 'Exact V9 lock marker missing.' }
 
-      - name: Apply exact V10 candidate delta
+      - name: Reconstruct and apply exact V10 candidate delta
         shell: pwsh
         run: |
-          $raw = (Get-Content 'ci/v10rc.b64' -Raw).Trim()
+          $parts = @(Get-ChildItem 'ci/v10rc.part*' | Sort-Object Name)
+          if ($parts.Count -ne 5) { throw "Expected 5 V10 delta parts, found $($parts.Count)." }
+          $raw = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
           [IO.File]::WriteAllBytes('v10rcdelta.tar.xz', [Convert]::FromBase64String($raw))
           $actual = (Get-FileHash 'v10rcdelta.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "V10_RC_DELTA_SHA256=$actual"
-          if ($actual -ne '310d9a09901b492293d4d83064ede750f301502cb2afc12f8739db30d21fce8f') { throw "V10 delta SHA mismatch: $actual" }
+          if ($actual -ne $env:V10_DELTA_SHA256) { throw "V10 delta SHA mismatch: $actual" }
           tar -xf 'v10rcdelta.tar.xz' -C 'ci-extract/DK_LOCK_V10'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to extract V10 delta.' }
           $deleteList = 'ci-extract/DK_LOCK_V10/.v10-delete-list.json'
           if (Test-Path $deleteList) {
             $deletes = Get-Content $deleteList -Raw | ConvertFrom-Json
@@ -63,7 +68,7 @@ jobs:
           }
           $version = (Get-Content 'ci-extract/DK_LOCK_V10/VERSION' -Raw).Trim()
           if ($version -ne '10.0.0-rc') { throw "V10 candidate version mismatch: $version" }
-          if ((Get-Content 'ci-extract/DK_LOCK_V10/src/DKLock.Core/IPC/IpcContracts.cs' -Raw) -notmatch 'Version = 7') { throw 'V10 IPC protocol 7 marker missing.' }
+          if ((Get-Content 'ci-extract/DK_LOCK_V10/src/DKLock.Core/IPC/IpcContracts.cs' -Raw) -notmatch 'Version\s*=\s*7') { throw 'V10 IPC protocol 7 marker missing.' }
 
       - name: Restore V10 solution
         shell: pwsh
