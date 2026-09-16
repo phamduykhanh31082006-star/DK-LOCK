@@ -70,6 +70,10 @@ jobs:
           if ($version -ne '10.0.0-rc') { throw "V10 candidate version mismatch: $version" }
           if ((Get-Content 'ci-extract/DK_LOCK_V10/src/DKLock.Core/IPC/IpcContracts.cs' -Raw) -notmatch 'Version\s*=\s*7') { throw 'V10 IPC protocol 7 marker missing.' }
 
+      - name: Apply deterministic V10 post-delta fixes
+        shell: pwsh
+        run: ./ci/v10-patches/apply-v10-ci-fixes.ps1 -Root 'ci-extract/DK_LOCK_V10'
+
       - name: Restore V10 solution
         shell: pwsh
         working-directory: ci-extract/DK_LOCK_V10
