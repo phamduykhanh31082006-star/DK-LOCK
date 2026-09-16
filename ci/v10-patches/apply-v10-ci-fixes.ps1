@@ -40,4 +40,29 @@ foreach ($required in @(
     if (-not (Test-Path (Join-Path $Root $required))) { throw "V10 required production asset missing after extraction: $required" }
 }
 
-Write-Host "Applied V10 CI fixes and verified production asset bundle SHA256=$assetHash"
+# Repair the reconstructed test asset deterministically. The first recovered bundle
+# contained Markdown backticks inside a double-quoted PowerShell string, which escaped
+# the closing quote and made the production entrypoint unparsable.
+$gateScript = Join-Path $Root 'scripts/test-v10.ps1'
+$gateText = Get-Content $gateScript -Raw
+$badReportLine = '"- Installer SHA-256: `$hash`", '''','
+$goodReportLine = '("- Installer SHA-256: " + $hash), '''','
+if ($gateText.Contains($badReportLine)) {
+    $gateText = $gateText.Replace($badReportLine, $goodReportLine)
+}
+$badHashLine = 'Write-Host "V10_USER_INSTALLER_SHA256=$((Get-FileHash $userZip -Algorithm SHA256).Hash.ToLowerInvariant())"'
+$goodHashLines = '$userZipHash = (Get-FileHash $userZip -Algorithm SHA256).Hash.ToLowerInvariant()' + "`r`n" + 'Write-Host "V10_USER_INSTALLER_SHA256=$userZipHash"'
+if ($gateText.Contains($badHashLine)) {
+    $gateText = $gateText.Replace($badHashLine, $goodHashLines)
+}
+Set-Content -Path $gateScript -Value $gateText -Encoding utf8
+
+$parseTokens = $null
+$parseErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile($gateScript, [ref]$parseTokens, [ref]$parseErrors) | Out-Null
+if ($parseErrors.Count -ne 0) {
+    $messages = ($parseErrors | ForEach-Object Message) -join '; '
+    throw "V10 production gate PowerShell parse failure after deterministic repair: $messages"
+}
+
+Write-Host "Applied V10 CI fixes, verified production asset bundle SHA256=$assetHash, and parser-validated test-v10.ps1"
