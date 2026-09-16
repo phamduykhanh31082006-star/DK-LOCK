@@ -13,8 +13,8 @@ $agent = Join-Path $Root 'src/DKLock.App/Protection/ApplicationWindowProtectionA
 if (-not (Test-Path $agent)) { throw "Missing V10 protection agent: $agent" }
 $agentText = Get-Content $agent -Raw
 if ($agentText -notmatch '(?m)^using System\.IO;\s*$') {
-    if ($agentText -notmatch '(?m)^using System;\s*$') { throw 'Expected System using marker missing from protection agent.' }
-    $agentText = $agentText -replace '(?m)^using System;\s*$', "using System;`r`nusing System.IO;"
+    if ($agentText -notmatch '(?m)^using\s+') { throw 'Protection agent has no using directive anchor.' }
+    $agentText = "using System.IO;`r`n" + $agentText
     Set-Content -Path $agent -Value $agentText -Encoding utf8
 }
 
