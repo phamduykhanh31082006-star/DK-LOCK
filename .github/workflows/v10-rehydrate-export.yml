@@ -1,0 +1,58 @@
+name: DK LOCK V10 Rehydrate Export
+
+on:
+  push:
+    branches: [ "v10-application-locker-refocus" ]
+
+jobs:
+  export:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: "1"
+      V10_DELTA_SHA256: "647b9d75568716e5f361a9a86ca8c88264ebadec296f0bfc6ce330908c4fe90d"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rehydrate exact locked V8 baseline
+        shell: pwsh
+        run: ./ci/rehydrate-v8-for-v9.ps1
+      - name: Rehydrate exact locked V9 final source
+        shell: pwsh
+        run: |
+          Move-Item 'ci-extract/DK_LOCK_V8' 'ci-extract/DK_LOCK_V10'
+          $v9 = Get-ChildItem 'ci/v9rc.part*' | Sort-Object Name
+          $b64 = ($v9 | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v9-source-overlay.tar.xz', [Convert]::FromBase64String($b64))
+          $actual = (Get-FileHash 'v9-source-overlay.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'b6ca1016e4825c8054802783932a2a19b5017572ae6bf240bdc681c1640de513') { throw "V9 source overlay SHA mismatch: $actual" }
+          tar -xf 'v9-source-overlay.tar.xz' -C 'ci-extract/DK_LOCK_V10'
+          ./ci/v9-patches/apply-v9-first-run-namespace-fix.ps1 -Root 'ci-extract/DK_LOCK_V10'
+      - name: Apply V10 candidate and current deterministic patches
+        shell: pwsh
+        run: |
+          $parts = @(Get-ChildItem 'ci/v10rc.part*' | Sort-Object Name)
+          if ($parts.Count -ne 5) { throw "Expected 5 V10 delta parts, found $($parts.Count)." }
+          $raw = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('v10rcdelta.tar.xz', [Convert]::FromBase64String($raw))
+          $actual = (Get-FileHash 'v10rcdelta.tar.xz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:V10_DELTA_SHA256) { throw "V10 delta SHA mismatch: $actual" }
+          tar -xf 'v10rcdelta.tar.xz' -C 'ci-extract/DK_LOCK_V10'
+          $deleteList = 'ci-extract/DK_LOCK_V10/.v10-delete-list.json'
+          if (Test-Path $deleteList) {
+            $deletes = Get-Content $deleteList -Raw | ConvertFrom-Json
+            foreach ($relative in @($deletes)) {
+              $target = Join-Path 'ci-extract/DK_LOCK_V10' $relative
+              if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+            }
+            Remove-Item $deleteList -Force
+          }
+          ./ci/v10-patches/apply-v10-ci-fixes.ps1 -Root 'ci-extract/DK_LOCK_V10'
+      - name: Upload reconstructed V10 source
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-rehydrated-current-source
+          path: ci-extract/DK_LOCK_V10
+          retention-days: 1
