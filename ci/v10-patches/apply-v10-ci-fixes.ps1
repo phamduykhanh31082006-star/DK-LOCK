@@ -34,14 +34,20 @@ if ($agentText -notmatch '(?m)^using System\.IO;\s*$') {
     Set-Content -Path $agent -Value $agentText -Encoding utf8
 }
 
+# Registry access is explicitly guarded at the narrow Windows-only call site so
+# the application-only service boundary does not leak CA1416 to all host callers/tests.
 $browserBootstrap = Join-Path $Root 'src/DKLock.Service/Protection/DefaultBrowserPolicyBootstrapper.cs'
 if (-not (Test-Path $browserBootstrap)) { throw "Missing V10 default browser bootstrapper: $browserBootstrap" }
 $browserText = Get-Content $browserBootstrap -Raw
-if ($browserText -notmatch '(?m)^using System\.Runtime\.Versioning;\s*$') {
-    $browserText = "using System.Runtime.Versioning;`r`n" + $browserText
+$browserText = $browserText.Replace("[SupportedOSPlatform(`"windows`")]`r`ninternal sealed class DefaultBrowserPolicyBootstrapper", 'internal sealed class DefaultBrowserPolicyBootstrapper')
+$browserText = $browserText.Replace("[SupportedOSPlatform(`"windows`")]`ninternal sealed class DefaultBrowserPolicyBootstrapper", 'internal sealed class DefaultBrowserPolicyBootstrapper')
+$methodMarker = "    private string? ResolveOwnerLocalAppData()`r`n    {`r`n"
+if (-not $browserText.Contains($methodMarker)) {
+    $methodMarker = "    private string? ResolveOwnerLocalAppData()`n    {`n"
 }
-if ($browserText -notmatch '\[SupportedOSPlatform\("windows"\)\]\s*internal sealed class DefaultBrowserPolicyBootstrapper') {
-    $browserText = $browserText.Replace('internal sealed class DefaultBrowserPolicyBootstrapper', "[SupportedOSPlatform(`"windows`")]`r`ninternal sealed class DefaultBrowserPolicyBootstrapper")
+if (-not $browserText.Contains('if (!OperatingSystem.IsWindows()) return null;')) {
+    if (-not $browserText.Contains($methodMarker)) { throw 'ResolveOwnerLocalAppData marker not found for Windows guard.' }
+    $browserText = $browserText.Replace($methodMarker, $methodMarker + "        if (!OperatingSystem.IsWindows()) return null;`r`n")
 }
 Set-Content -Path $browserBootstrap -Value $browserText -Encoding utf8
 
@@ -88,4 +94,4 @@ if ($parseErrors.Count -ne 0) {
     throw "V10 production gate PowerShell parse failure after deterministic repair: $messages"
 }
 
-Write-Host "Applied exact V10 target override SHA256=$targetHash, Windows-platform compile repairs, production asset SHA256=$assetHash, and parser-validated test-v10.ps1"
+Write-Host "Applied exact V10 target override SHA256=$targetHash, narrow Windows registry guard, production asset SHA256=$assetHash, and parser-validated test-v10.ps1"
