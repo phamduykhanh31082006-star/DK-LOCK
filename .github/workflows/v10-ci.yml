@@ -107,11 +107,13 @@ jobs:
           $ipc = Get-Content 'ci-extract/DK_LOCK_V10/src/DKLock.Core/IPC/IpcContracts.cs' -Raw
           if ($ipc -notmatch 'Version\s*=\s*7') { throw 'V10 IPC protocol 7 marker missing.' }
 
-      - name: Apply deterministic V10 post-delta fixes and production assets
+      - name: Apply deterministic V10 post-delta fixes, production assets, and GUI E2E
         shell: pwsh
         run: |
           ./ci/v10-patches/apply-v10-ci-fixes.ps1 -Root 'ci-extract/DK_LOCK_V10'
+          ./ci/v10-patches/apply-v10-gui-e2e.ps1 -Root 'ci-extract/DK_LOCK_V10'
           if (-not (Test-Path 'ci-extract/DK_LOCK_V10/scripts/test-v10.ps1')) { throw 'Mandatory V10 production gate entrypoint scripts/test-v10.ps1 is missing after asset hydration.' }
+          if (-not (Test-Path 'ci-extract/DK_LOCK_V10/scripts/test-v10-window-lock-e2e.ps1')) { throw 'Mandatory V10 real window-lock E2E is missing after hydration.' }
 
       - name: Restore exact V10 solution
         shell: pwsh
@@ -123,7 +125,7 @@ jobs:
         working-directory: ci-extract/DK_LOCK_V10
         run: dotnet build .\DKLock.sln -c Release --no-restore -p:TreatWarningsAsErrors=true
 
-      - name: Run complete V10 contract static runtime and release gates
+      - name: Run complete V10 contract static runtime GUI and release gates
         shell: pwsh
         working-directory: ci-extract/DK_LOCK_V10
         run: ./scripts/test-v10.ps1
@@ -140,6 +142,8 @@ jobs:
           )
           $report = $reportCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $report) { throw 'Production gate passed without a V10 final report.' }
+          $guiEvidence = 'ci-extract/DK_LOCK_V10/report/runtime/V10_WINDOW_LOCK_E2E.txt'
+          if (-not (Test-Path $guiEvidence) -or (Get-Content $guiEvidence -Raw) -notmatch 'RESULT: PASS') { throw 'Production gate passed without PASS evidence from real V10 window-lock GUI E2E.' }
           $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "V10_USER_INSTALLER_SHA256=$zipHash"
 
