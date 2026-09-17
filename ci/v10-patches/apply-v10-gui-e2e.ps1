@@ -5,7 +5,7 @@ $guiSource = Join-Path $PSScriptRoot 'v10-window-lock-e2e.ps1'
 $guiTarget = Join-Path $Root 'scripts/test-v10-window-lock-e2e.ps1'
 if (-not (Test-Path $guiSource)) { throw "Missing V10 GUI E2E harness: $guiSource" }
 $guiHash = (Get-FileHash $guiSource -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($guiHash -ne '0b7863460f24e0f519d2f121938f52c0d5cd87d400cc5fdc0dbd80c072f3ee81') { throw "V10 GUI E2E harness SHA mismatch: $guiHash" }
+if ($guiHash -ne '96cbe071808d007a9bdb76bac84b5da9458a6afd6d03f1ad512bb85177a3ddf1') { throw "V10 GUI E2E harness SHA mismatch: $guiHash" }
 Copy-Item $guiSource $guiTarget -Force
 
 $probe = Join-Path $Root 'tools/DKLock.V10.Probe/Program.cs'
