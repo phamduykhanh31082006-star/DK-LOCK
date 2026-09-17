@@ -42,14 +42,30 @@ $browserText = Get-Content $browserBootstrap -Raw
 $browserText = $browserText.Replace("[SupportedOSPlatform(`"windows`")]`r`ninternal sealed class DefaultBrowserPolicyBootstrapper", 'internal sealed class DefaultBrowserPolicyBootstrapper')
 $browserText = $browserText.Replace("[SupportedOSPlatform(`"windows`")]`ninternal sealed class DefaultBrowserPolicyBootstrapper", 'internal sealed class DefaultBrowserPolicyBootstrapper')
 $methodMarker = "    private string? ResolveOwnerLocalAppData()`r`n    {`r`n"
-if (-not $browserText.Contains($methodMarker)) {
-    $methodMarker = "    private string? ResolveOwnerLocalAppData()`n    {`n"
-}
+if (-not $browserText.Contains($methodMarker)) { $methodMarker = "    private string? ResolveOwnerLocalAppData()`n    {`n" }
 if (-not $browserText.Contains('if (!OperatingSystem.IsWindows()) return null;')) {
     if (-not $browserText.Contains($methodMarker)) { throw 'ResolveOwnerLocalAppData marker not found for Windows guard.' }
     $browserText = $browserText.Replace($methodMarker, $methodMarker + "        if (!OperatingSystem.IsWindows()) return null;`r`n")
 }
 Set-Content -Path $browserBootstrap -Value $browserText -Encoding utf8
+
+# Preserve the AlreadyAuthorized contract explicitly in the IPC Code as well as the
+# typed response field. The desktop agent and runtime probe must never re-prompt or
+# stall when the RAM-only UntilApplicationClose session is still valid.
+$hostPath = Join-Path $Root 'src/DKLock.Service/DkLockServiceHost.cs'
+if (-not (Test-Path $hostPath)) { throw "Missing V10 service host: $hostPath" }
+$hostText = Get-Content $hostPath -Raw
+$authorizedPattern = 'return IpcResponse\.Ok\(v, request\.RequestId, result\.AlreadyAuthorized \? "application already authorized" : "window challenge created",\s*_stateStore\.Current, challenge: result\.Challenge, alreadyAuthorized: result\.AlreadyAuthorized\);'
+if ($hostText -notmatch 'windowResponse with \{ Code = "ALREADY_AUTHORIZED" \}') {
+    if ($hostText -notmatch $authorizedPattern) { throw 'V10 window challenge response marker not found.' }
+    $authorizedReplacement = @'
+var windowResponse = IpcResponse.Ok(v, request.RequestId, result.AlreadyAuthorized ? "application already authorized" : "window challenge created",
+            _stateStore.Current, challenge: result.Challenge, alreadyAuthorized: result.AlreadyAuthorized);
+        return result.AlreadyAuthorized ? windowResponse with { Code = "ALREADY_AUTHORIZED" } : windowResponse;
+'@
+    $hostText = [regex]::Replace($hostText, $authorizedPattern, $authorizedReplacement, 1)
+    Set-Content -Path $hostPath -Value $hostText -Encoding utf8
+}
 
 # Hydrate the production test/release assets and verify their immutable carrier hash.
 $assetCarrier = Join-Path $PSScriptRoot 'v10-ci-assets.b64'
@@ -94,4 +110,4 @@ if ($parseErrors.Count -ne 0) {
     throw "V10 production gate PowerShell parse failure after deterministic repair: $messages"
 }
 
-Write-Host "Applied exact V10 target override SHA256=$targetHash, narrow Windows registry guard, production asset SHA256=$assetHash, and parser-validated test-v10.ps1"
+Write-Host "Applied exact V10 target override SHA256=$targetHash, narrow Windows registry guard, explicit ALREADY_AUTHORIZED IPC status, production asset SHA256=$assetHash, and parser-validated test-v10.ps1"
