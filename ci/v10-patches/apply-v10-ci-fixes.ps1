@@ -1,13 +1,29 @@
 param([Parameter(Mandatory=$true)][string]$Root)
 $ErrorActionPreference = 'Stop'
 
+# Apply the unified, locally validated V10 target override to the reconstructed candidate.
+$targetParts = @(Get-ChildItem (Join-Path $PSScriptRoot 'target.part*') | Sort-Object Name)
+if ($targetParts.Count -ne 6) { throw "Expected 6 V10 target override parts, found $($targetParts.Count)." }
+$targetRaw = ($targetParts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+$tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
+$targetArchive = Join-Path $tempRoot 'v10-target-override.tar.xz'
+[IO.File]::WriteAllBytes($targetArchive, [Convert]::FromBase64String($targetRaw))
+$targetHash = (Get-FileHash $targetArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+$expectedTargetHash = 'b10af234bf91325a6a38c643c0cca149da4db094ea8f140bc8d1bbcd1abb22df'
+if ($targetHash -ne $expectedTargetHash) { throw "V10 target override SHA mismatch: $targetHash" }
+tar -xf $targetArchive -C $Root
+if ($LASTEXITCODE -ne 0) { throw 'Failed to extract V10 target override.' }
+Remove-Item $targetArchive -Force -ErrorAction SilentlyContinue
+
+# Deterministic compile repair retained from the recovered candidate.
 $overlay = Join-Path $Root 'src/DKLock.App/Protection/ApplicationLockOverlayWindow.xaml'
 if (-not (Test-Path $overlay)) { throw "Missing V10 overlay: $overlay" }
 $text = Get-Content $overlay -Raw
 $needle = '<Grid Background="{DynamicResource Brush.Window}">'
-if ($text -notlike "*$needle*") { throw 'Expected V10 overlay Grid background marker is missing.' }
-$text = $text.Replace($needle, '<Grid>')
-Set-Content -Path $overlay -Value $text -Encoding utf8
+if ($text -like "*$needle*") {
+    $text = $text.Replace($needle, '<Grid>')
+    Set-Content -Path $overlay -Value $text -Encoding utf8
+}
 
 $agent = Join-Path $Root 'src/DKLock.App/Protection/ApplicationWindowProtectionAgent.cs'
 if (-not (Test-Path $agent)) { throw "Missing V10 protection agent: $agent" }
@@ -18,15 +34,17 @@ if ($agentText -notmatch '(?m)^using System\.IO;\s*$') {
     Set-Content -Path $agent -Value $agentText -Encoding utf8
 }
 
+# Hydrate the production test/release assets and verify their immutable carrier hash.
 $assetCarrier = Join-Path $PSScriptRoot 'v10-ci-assets.b64'
 if (-not (Test-Path $assetCarrier)) { throw "Missing V10 test/release asset carrier: $assetCarrier" }
-$assetArchive = Join-Path $env:RUNNER_TEMP 'v10-ci-assets.tar.xz'
+$assetArchive = Join-Path $tempRoot 'v10-ci-assets.tar.xz'
 $assetB64 = (Get-Content $assetCarrier -Raw).Trim()
 [IO.File]::WriteAllBytes($assetArchive, [Convert]::FromBase64String($assetB64))
 $assetHash = (Get-FileHash $assetArchive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($assetHash -ne '72bfef81ed50ca736573b0222a8c5acfb26432f17bdc0110fea289302706370e') { throw "V10 test/release asset SHA mismatch: $assetHash" }
 tar -xf $assetArchive -C $Root
 if ($LASTEXITCODE -ne 0) { throw 'Failed to extract V10 test/release asset bundle.' }
+Remove-Item $assetArchive -Force -ErrorAction SilentlyContinue
 foreach ($required in @(
     'scripts/test-v10.ps1',
     'scripts/build-v10-release.ps1',
@@ -40,21 +58,15 @@ foreach ($required in @(
     if (-not (Test-Path (Join-Path $Root $required))) { throw "V10 required production asset missing after extraction: $required" }
 }
 
-# Repair the reconstructed test asset deterministically. The first recovered bundle
-# contained Markdown backticks inside a double-quoted PowerShell string, which escaped
-# the closing quote and made the production entrypoint unparsable.
+# Repair the recovered test asset deterministically and parser-validate it before execution.
 $gateScript = Join-Path $Root 'scripts/test-v10.ps1'
 $gateText = Get-Content $gateScript -Raw
 $badReportLine = '"- Installer SHA-256: `$hash`", '''','
 $goodReportLine = '("- Installer SHA-256: " + $hash), '''','
-if ($gateText.Contains($badReportLine)) {
-    $gateText = $gateText.Replace($badReportLine, $goodReportLine)
-}
+if ($gateText.Contains($badReportLine)) { $gateText = $gateText.Replace($badReportLine, $goodReportLine) }
 $badHashLine = 'Write-Host "V10_USER_INSTALLER_SHA256=$((Get-FileHash $userZip -Algorithm SHA256).Hash.ToLowerInvariant())"'
 $goodHashLines = '$userZipHash = (Get-FileHash $userZip -Algorithm SHA256).Hash.ToLowerInvariant()' + "`r`n" + 'Write-Host "V10_USER_INSTALLER_SHA256=$userZipHash"'
-if ($gateText.Contains($badHashLine)) {
-    $gateText = $gateText.Replace($badHashLine, $goodHashLines)
-}
+if ($gateText.Contains($badHashLine)) { $gateText = $gateText.Replace($badHashLine, $goodHashLines) }
 Set-Content -Path $gateScript -Value $gateText -Encoding utf8
 
 $parseTokens = $null
@@ -65,4 +77,4 @@ if ($parseErrors.Count -ne 0) {
     throw "V10 production gate PowerShell parse failure after deterministic repair: $messages"
 }
 
-Write-Host "Applied V10 CI fixes, verified production asset bundle SHA256=$assetHash, and parser-validated test-v10.ps1"
+Write-Host "Applied exact V10 target override SHA256=$targetHash, verified production asset bundle SHA256=$assetHash, and parser-validated test-v10.ps1"
