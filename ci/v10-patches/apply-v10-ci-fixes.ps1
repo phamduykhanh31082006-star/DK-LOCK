@@ -15,7 +15,7 @@ tar -xf $targetArchive -C $Root
 if ($LASTEXITCODE -ne 0) { throw 'Failed to extract V10 target override.' }
 Remove-Item $targetArchive -Force -ErrorAction SilentlyContinue
 
-# Deterministic compile repair retained from the recovered candidate.
+# Deterministic compile repairs retained after the recovered candidate was reconstructed.
 $overlay = Join-Path $Root 'src/DKLock.App/Protection/ApplicationLockOverlayWindow.xaml'
 if (-not (Test-Path $overlay)) { throw "Missing V10 overlay: $overlay" }
 $text = Get-Content $overlay -Raw
@@ -33,6 +33,17 @@ if ($agentText -notmatch '(?m)^using System\.IO;\s*$') {
     $agentText = "using System.IO;`r`n" + $agentText
     Set-Content -Path $agent -Value $agentText -Encoding utf8
 }
+
+$browserBootstrap = Join-Path $Root 'src/DKLock.Service/Protection/DefaultBrowserPolicyBootstrapper.cs'
+if (-not (Test-Path $browserBootstrap)) { throw "Missing V10 default browser bootstrapper: $browserBootstrap" }
+$browserText = Get-Content $browserBootstrap -Raw
+if ($browserText -notmatch '(?m)^using System\.Runtime\.Versioning;\s*$') {
+    $browserText = "using System.Runtime.Versioning;`r`n" + $browserText
+}
+if ($browserText -notmatch '\[SupportedOSPlatform\("windows"\)\]\s*internal sealed class DefaultBrowserPolicyBootstrapper') {
+    $browserText = $browserText.Replace('internal sealed class DefaultBrowserPolicyBootstrapper', "[SupportedOSPlatform(`"windows`")]`r`ninternal sealed class DefaultBrowserPolicyBootstrapper")
+}
+Set-Content -Path $browserBootstrap -Value $browserText -Encoding utf8
 
 # Hydrate the production test/release assets and verify their immutable carrier hash.
 $assetCarrier = Join-Path $PSScriptRoot 'v10-ci-assets.b64'
@@ -77,4 +88,4 @@ if ($parseErrors.Count -ne 0) {
     throw "V10 production gate PowerShell parse failure after deterministic repair: $messages"
 }
 
-Write-Host "Applied exact V10 target override SHA256=$targetHash, verified production asset bundle SHA256=$assetHash, and parser-validated test-v10.ps1"
+Write-Host "Applied exact V10 target override SHA256=$targetHash, Windows-platform compile repairs, production asset SHA256=$assetHash, and parser-validated test-v10.ps1"
