@@ -8,6 +8,17 @@ $guiHash = (Get-FileHash $guiSource -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($guiHash -ne '96cbe071808d007a9bdb76bac84b5da9458a6afd6d03f1ad512bb85177a3ddf1') { throw "V10 GUI E2E harness SHA mismatch: $guiHash" }
 Copy-Item $guiSource $guiTarget -Force
 
+# The deterministic WinForms target must keep wait registrations alive for the
+# whole message loop. RegisteredWaitHandle is not IDisposable on .NET 8, so
+# unregister explicitly after Application.Run returns.
+$guiText = Get-Content $guiTarget -Raw
+$guiText = $guiText.Replace('using var showReg = ThreadPool.RegisterWaitForSingleObject', 'var showReg = ThreadPool.RegisterWaitForSingleObject')
+$guiText = $guiText.Replace('using var exitReg = ThreadPool.RegisterWaitForSingleObject', 'var exitReg = ThreadPool.RegisterWaitForSingleObject')
+$runMarker = 'Application.Run(form);'
+if (-not $guiText.Contains($runMarker)) { throw 'V10 GUI target message-loop marker missing.' }
+$guiText = $guiText.Replace($runMarker, $runMarker + "`r`nshowReg.Unregister(null);`r`nexitReg.Unregister(null);")
+Set-Content $guiTarget -Value $guiText -Encoding utf8
+
 $probe = Join-Path $Root 'tools/DKLock.V10.Probe/Program.cs'
 $probeText = Get-Content $probe -Raw
 $probeText = $probeText.Replace('usage: <ping|service-e2e|retired> <pipe> [master] [pin]', 'usage: <ping|add-app|service-e2e|retired> <pipe> [args]')
@@ -81,4 +92,4 @@ foreach ($script in @($gate, $guiTarget)) {
     }
 }
 
-Write-Host "Wired real V10 window-lock GUI E2E SHA256=$guiHash, GUI target registration, runtime evidence/reporting, and deterministic success exit code."
+Write-Host "Wired real V10 window-lock GUI E2E SHA256=$guiHash, fixed .NET 8 wait-registration lifetime, GUI target registration, runtime evidence/reporting, and deterministic success exit code."
