@@ -77,7 +77,7 @@ foreach ($script in @($gate, $guiTarget)) {
     [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors) | Out-Null
     if ($errors.Count -ne 0) {
         $messages = ($errors | ForEach-Object Message) -join '; '
-        throw "PowerShell parse failure in $script: $messages"
+        throw "PowerShell parse failure in ${script}: $messages"
     }
 }
 
