@@ -25,6 +25,28 @@ if ($text -like "*$needle*") {
     Set-Content -Path $overlay -Value $text -Encoding utf8
 }
 
+# Runtime XAML repair: the V10 overlay uses GhostButton for credential switching.
+# The recovered V9 style dictionary did not define it, causing InitializeComponent()
+# to throw at runtime and silently preventing every protection overlay from appearing.
+$styles = Join-Path $Root 'src/DKLock.App/Resources/Styles.xaml'
+if (-not (Test-Path $styles)) { throw "Missing V10 styles dictionary: $styles" }
+$stylesText = Get-Content $styles -Raw
+if ($stylesText -notmatch 'x:Key="GhostButton"') {
+    $secondaryMarker = '    <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">'
+    if (-not $stylesText.Contains($secondaryMarker)) { throw 'V10 GhostButton insertion anchor missing.' }
+    $ghostStyle = @'
+    <Style x:Key="GhostButton" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Accent}"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+
+'@
+    $stylesText = $stylesText.Replace($secondaryMarker, $ghostStyle + $secondaryMarker)
+    Set-Content -Path $styles -Value $stylesText -Encoding utf8
+}
+
 $agent = Join-Path $Root 'src/DKLock.App/Protection/ApplicationWindowProtectionAgent.cs'
 if (-not (Test-Path $agent)) { throw "Missing V10 protection agent: $agent" }
 $agentText = Get-Content $agent -Raw
