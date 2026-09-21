@@ -60,7 +60,8 @@ if ($overlayCode -notmatch 'TransformFromDevice') {
         if (_overlayHandle == IntPtr.Zero) return;
 
         var aboveTarget = NativeWindowMethods.GetWindow(_targetWindow, NativeWindowMethods.GW_HWNDPREV);
-        var flags = NativeWindowMethods.SWP_NOACTIVATE | NativeWindowMethods.SWP_SHOWWINDOW;
+        var flags = NativeWindowMethods.SWP_NOACTIVATE;
+        if (IsVisible) flags |= NativeWindowMethods.SWP_SHOWWINDOW;
         if (aboveTarget == _overlayHandle)
         {
             flags |= NativeWindowMethods.SWP_NOZORDER;
@@ -153,6 +154,11 @@ if ($overlayCode -notmatch 'DispatcherPriority\.Render') {
         var firstShow = !IsVisible;
         if (firstShow)
         {
+            if (_overlayHandle == IntPtr.Zero)
+            {
+                _overlayHandle = new WindowInteropHelper(this).EnsureHandle();
+            }
+            Position(bounds);
             Show();
             UpdateLayout();
         }
