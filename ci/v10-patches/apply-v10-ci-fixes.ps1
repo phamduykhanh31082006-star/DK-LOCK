@@ -122,7 +122,51 @@ if ($overlayCode -notmatch 'TransformFromDevice') {
 # Complete layout first, then position again at Render priority using fresh DWM bounds.
 $overlayCode = Get-Content $overlayCodePath -Raw
 if ($overlayCode -notmatch 'DispatcherPriority\.Render') {
-    if ($overlayCode -notmatch '(?m)^using System\.Windows\.Threading;\s*
+    if ($overlayCode -notmatch '(?m)^using System\.Windows\.Threading;\s*$') {
+        $overlayCode = $overlayCode.Replace('using System.Windows.Interop;', "using System.Windows.Interop;`r`nusing System.Windows.Threading;")
+    }
+    $showPattern = '(?s)    public void ShowProtected\(bool requestFocus\)\s*\{.*?\n    \}\s*(?=\n    public void Reposition\(\))'
+    if ($overlayCode -notmatch $showPattern) { throw 'V10 overlay ShowProtected method anchor missing.' }
+    $showReplacement = @'
+    public void ShowProtected(bool requestFocus)
+    {
+        if (!NativeWindowMethods.IsWindow(_targetWindow)) return;
+        if (!NativeWindowMethods.TryGetWindowBoundsOnScreen(_targetWindow, out var bounds)) return;
+
+        var firstShow = !IsVisible;
+        if (firstShow)
+        {
+            Show();
+            UpdateLayout();
+        }
+
+        Position(bounds);
+
+        if (firstShow)
+        {
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+            {
+                if (!IsVisible || !NativeWindowMethods.IsWindow(_targetWindow)) return;
+                if (NativeWindowMethods.TryGetWindowBoundsOnScreen(_targetWindow, out var latestBounds))
+                {
+                    Position(latestBounds);
+                }
+            }));
+        }
+
+        if (requestFocus)
+        {
+            Activate();
+            SecretBox.Focus();
+            if (_overlayHandle != IntPtr.Zero) NativeWindowMethods.SetForegroundWindow(_overlayHandle);
+        }
+    }
+'@
+    $overlayCode = [regex]::Replace($overlayCode, $showPattern, $showReplacement.TrimEnd(), 1)
+    Set-Content -Path $overlayCodePath -Value $overlayCode -Encoding utf8
+}
+
+$agent = Join-Path $Root 'src/DKLock.App/Protection/ApplicationWindowProtectionAgent.cs'
 if (-not (Test-Path $agent)) { throw "Missing V10 protection agent: $agent" }
 $agentText = Get-Content $agent -Raw
 if ($agentText -notmatch '(?m)^using System\.IO;\s*$') {
