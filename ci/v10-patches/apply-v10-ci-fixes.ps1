@@ -273,4 +273,25 @@ if ($parseErrors.Count -ne 0) {
     throw "V10 production gate PowerShell parse failure after deterministic repair: $messages"
 }
 
+# Promote the validated candidate to the final V10 release identity.
+$promotionFiles = @(
+    'VERSION',
+    'Directory.Build.props',
+    'tools/DKLock.Setup/SetupOptions.cs',
+    'scripts/build-v10-release.ps1',
+    'scripts/test-v10.ps1',
+    'tests/DKLock.V10.ContractTests/Program.cs',
+    'tests/validate_v10.py'
+)
+foreach ($relative in $promotionFiles) {
+    $path = Join-Path $Root $relative
+    if (-not (Test-Path $path)) { throw "V10 final promotion file missing: $relative" }
+    $content = Get-Content $path -Raw
+    $content = $content.Replace('10.0.0-rc', '10.0.0')
+    $content = $content.Replace('V10 release candidate', 'V10 final')
+    $content = $content.Replace('V10 RC', 'V10 final')
+    Set-Content -Path $path -Value $content -Encoding utf8
+}
+$finalVersion = (Get-Content (Join-Path $Root 'VERSION') -Raw).Trim()
+if ($finalVersion -ne '10.0.0') { throw "V10 final promotion failed: $finalVersion" }
 Write-Host "Applied exact V10 target override SHA256=$targetHash, narrow Windows registry guard, explicit ALREADY_AUTHORIZED IPC status, production asset SHA256=$assetHash, and parser-validated test-v10.ps1"
