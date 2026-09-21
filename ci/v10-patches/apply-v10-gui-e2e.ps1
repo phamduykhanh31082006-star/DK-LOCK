@@ -19,6 +19,74 @@ if (-not $guiText.Contains($runMarker)) { throw 'V10 GUI target message-loop mar
 $guiText = $guiText.Replace($runMarker, $runMarker + "`r`nshowReg.Unregister(null);`r`nexitReg.Unregister(null);")
 Set-Content $guiTarget -Value $guiText -Encoding utf8
 
+# E2E-only agent trace. It is inert unless DKLOCK_V10_AGENT_TRACE is set.
+$agent = Join-Path $Root 'src/DKLock.App/Protection/ApplicationWindowProtectionAgent.cs'
+$agentText = Get-Content $agent -Raw
+if ($agentText -notmatch 'V10AgentTrace') {
+    $propertyAnchor = '    public int ProtectedWindowCount => _windows.Count;'
+    if (-not $agentText.Contains($propertyAnchor)) { throw 'V10 agent trace property anchor missing.' }
+    $traceHelper = @'
+    private static void V10AgentTrace(string message)
+    {
+        var path = Environment.GetEnvironmentVariable("DKLOCK_V10_AGENT_TRACE");
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            File.AppendAllText(path, $"{DateTimeOffset.UtcNow:O} pid={Environment.ProcessId} {message}{Environment.NewLine}");
+        }
+        catch { }
+    }
+
+'@
+    $agentText = $agentText.Replace($propertyAnchor, $traceHelper + $propertyAnchor)
+    $agentText = $agentText.Replace('        _started = true;', '        _started = true;' + "`r`n" + '        V10AgentTrace("StartAsync begin");')
+    $agentText = $agentText.Replace('        await RefreshPoliciesAsync(cancellationToken);', '        await RefreshPoliciesAsync(cancellationToken);' + "`r`n" + '        V10AgentTrace($"policies={_enabledPolicies.Count}");')
+    $agentText = $agentText.Replace('        InstallHooks();', '        InstallHooks();' + "`r`n" + '        V10AgentTrace($"hooks={_hooks.Count}");')
+    $agentText = $agentText.Replace('        await ReconcileVisibleWindowsAsync(requestFocusForForeground: true);', '        await ReconcileVisibleWindowsAsync(requestFocusForForeground: true);' + "`r`n" + '        V10AgentTrace($"initial_windows={_windows.Count}");')
+    $normalizeAnchor = '        try { normalized = ApplicationPath.Normalize(path); }' + "`r`n" + '        catch { return; }'
+    if (-not $agentText.Contains($normalizeAnchor)) {
+        $normalizeAnchor = '        try { normalized = ApplicationPath.Normalize(path); }' + "`n" + '        catch { return; }'
+    }
+    if (-not $agentText.Contains($normalizeAnchor)) { throw 'V10 agent normalize trace anchor missing.' }
+    $agentText = $agentText.Replace($normalizeAnchor, $normalizeAnchor + "`r`n" + '        V10AgentTrace($"observe hwnd={hwnd} pid={processId} path={normalized} visible={NativeWindowMethods.IsWindowVisible(hwnd)} iconic={NativeWindowMethods.IsIconic(hwnd)}");')
+    $policyMiss = '        if (!TryGetProtectedPolicy(normalized, out var policy) || policy is null)' + "`r`n" + '        {'
+    if (-not $agentText.Contains($policyMiss)) {
+        $policyMiss = '        if (!TryGetProtectedPolicy(normalized, out var policy) || policy is null)' + "`n" + '        {'
+    }
+    if (-not $agentText.Contains($policyMiss)) { throw 'V10 agent policy trace anchor missing.' }
+    $agentText = $agentText.Replace($policyMiss, $policyMiss + "`r`n" + '            V10AgentTrace($"not_protected path={normalized} policies={_enabledPolicies.Count}");')
+    $cancelAnchor = '        CancelPendingRelease(normalized);'
+    $agentText = $agentText.Replace($cancelAnchor, '        V10AgentTrace($"protected path={normalized} display={policy.DisplayName}");' + "`r`n" + $cancelAnchor)
+    $incomingAnchor = '        var incoming = response.Items' + "`r`n" + '            .Where(x => x.Enabled)' + "`r`n" + '            .ToDictionary(x => ApplicationPath.Normalize(x.ExecutablePath), StringComparer.OrdinalIgnoreCase);'
+    if (-not $agentText.Contains($incomingAnchor)) {
+        $incomingAnchor = '        var incoming = response.Items' + "`n" + '            .Where(x => x.Enabled)' + "`n" + '            .ToDictionary(x => ApplicationPath.Normalize(x.ExecutablePath), StringComparer.OrdinalIgnoreCase);'
+    }
+    if (-not $agentText.Contains($incomingAnchor)) { throw 'V10 agent incoming-policy trace anchor missing.' }
+    $agentText = $agentText.Replace($incomingAnchor, $incomingAnchor + "`r`n" + '        V10AgentTrace($"refresh_response success={response.Success} enabled={incoming.Count}");')
+    Set-Content $agent -Value $agentText -Encoding utf8
+}
+
+# Route the E2E trace into the runtime evidence directory and include it on failure.
+$traceInject = '$reportDir = Join-Path $Root ''report\runtime'''
+$guiText = Get-Content $guiTarget -Raw
+if ($guiText -notmatch 'DKLOCK_V10_AGENT_TRACE') {
+    if (-not $guiText.Contains($traceInject)) { throw 'V10 GUI report directory anchor missing for trace.' }
+    $guiText = $guiText.Replace(
+        $traceInject,
+        $traceInject + "`r`n" + '$agentTrace = Join-Path $reportDir ''V10_AGENT_TRACE.txt''' + "`r`n" + '$oldAgentTrace = $env:DKLOCK_V10_AGENT_TRACE' + "`r`n" + '$env:DKLOCK_V10_AGENT_TRACE = $agentTrace')
+    $catchAnchor = 'catch {' + "`r`n" + '    $lines.Add("FAIL: $($_.Exception.Message)")'
+    if (-not $guiText.Contains($catchAnchor)) {
+        $catchAnchor = 'catch {' + "`n" + '    $lines.Add("FAIL: $($_.Exception.Message)")'
+    }
+    if (-not $guiText.Contains($catchAnchor)) { throw 'V10 GUI catch trace anchor missing.' }
+    $catchReplacement = $catchAnchor + "`r`n" + '    if (Test-Path $agentTrace) { $lines.Add(''AGENT TRACE:''); $lines.AddRange([string[]](Get-Content $agentTrace)) }'
+    $guiText = $guiText.Replace($catchAnchor, $catchReplacement)
+    $restoreAnchor = '    if ($null -eq $oldPipe) { Remove-Item Env:DKLOCK_PIPE_NAME -ErrorAction SilentlyContinue } else { $env:DKLOCK_PIPE_NAME = $oldPipe }'
+    if (-not $guiText.Contains($restoreAnchor)) { throw 'V10 GUI env restore anchor missing.' }
+    $guiText = $guiText.Replace($restoreAnchor, $restoreAnchor + "`r`n" + '    if ($null -eq $oldAgentTrace) { Remove-Item Env:DKLOCK_V10_AGENT_TRACE -ErrorAction SilentlyContinue } else { $env:DKLOCK_V10_AGENT_TRACE = $oldAgentTrace }')
+    Set-Content $guiTarget -Value $guiText -Encoding utf8
+}
+
 $probe = Join-Path $Root 'tools/DKLock.V10.Probe/Program.cs'
 $probeText = Get-Content $probe -Raw
 $probeText = $probeText.Replace('usage: <ping|service-e2e|retired> <pipe> [master] [pin]', 'usage: <ping|add-app|service-e2e|retired> <pipe> [args]')
