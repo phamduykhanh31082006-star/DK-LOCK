@@ -17,6 +17,28 @@ $guiText = $guiText.Replace('using var exitReg = ThreadPool.RegisterWaitForSingl
 $runMarker = 'Application.Run(form);'
 if (-not $guiText.Contains($runMarker)) { throw 'V10 GUI target message-loop marker missing.' }
 $guiText = $guiText.Replace($runMarker, $runMarker + "`r`nshowReg.Unregister(null);`r`nexitReg.Unregister(null);")
+
+# Compare geometry using the same visible outer-frame contract as the product.
+# GetWindowRect includes invisible resize borders on modern Windows; DK LOCK
+# intentionally uses DWMWA_EXTENDED_FRAME_BOUNDS for the visible application frame.
+$rectPInvoke = '[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);'
+if (-not $guiText.Contains($rectPInvoke)) { throw 'V10 GUI geometry P/Invoke anchor missing.' }
+$guiText = $guiText.Replace(
+    $rectPInvoke,
+    $rectPInvoke + "`r`n" + '  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out RECT rect, int size);' + "`r`n" + '  public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;')
+$getRectPattern = '(?s)function Get-Rect\(\[IntPtr\]\$Hwnd\) \{.*?\n\}'
+if ($guiText -notmatch $getRectPattern) { throw 'V10 GUI Get-Rect anchor missing.' }
+$getRectReplacement = @'
+function Get-Rect([IntPtr]$Hwnd) {
+    $raw = New-Object V10Win32Probe+RECT
+    if (-not [V10Win32Probe]::GetWindowRect($Hwnd, [ref]$raw)) { throw "GetWindowRect failed for $Hwnd" }
+    $visual = New-Object V10Win32Probe+RECT
+    $dwm = [V10Win32Probe]::DwmGetWindowAttribute($Hwnd, [V10Win32Probe]::DWMWA_EXTENDED_FRAME_BOUNDS, [ref]$visual, 16)
+    if ($dwm -eq 0 -and $visual.Right -gt $visual.Left -and $visual.Bottom -gt $visual.Top) { return $visual }
+    return $raw
+}
+'@
+$guiText = [regex]::Replace($guiText, $getRectPattern, $getRectReplacement.TrimEnd(), 1)
 Set-Content $guiTarget -Value $guiText -Encoding utf8
 
 # E2E-only agent trace. It is inert unless DKLOCK_V10_AGENT_TRACE is set.
