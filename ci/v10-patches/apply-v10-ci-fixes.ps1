@@ -47,6 +47,75 @@ if ($stylesText -notmatch 'x:Key="GhostButton"') {
     Set-Content -Path $styles -Value $stylesText -Encoding utf8
 }
 
+# Runtime geometry repair: synchronize WPF device-independent bounds with the
+# physical target HWND bounds before the final native z-order placement.
+$overlayCodePath = Join-Path $Root 'src/DKLock.App/Protection/ApplicationLockOverlayWindow.xaml.cs'
+if (-not (Test-Path $overlayCodePath)) { throw "Missing V10 overlay code-behind: $overlayCodePath" }
+$overlayCode = Get-Content $overlayCodePath -Raw
+if ($overlayCode -notmatch 'TransformFromDevice') {
+    $oldPosition = @'
+    private void Position(NativeWindowMethods.RECT bounds)
+    {
+        if (_overlayHandle == IntPtr.Zero) _overlayHandle = new WindowInteropHelper(this).Handle;
+        if (_overlayHandle == IntPtr.Zero) return;
+
+        var aboveTarget = NativeWindowMethods.GetWindow(_targetWindow, NativeWindowMethods.GW_HWNDPREV);
+        var flags = NativeWindowMethods.SWP_NOACTIVATE | NativeWindowMethods.SWP_SHOWWINDOW;
+        if (aboveTarget == _overlayHandle)
+        {
+            flags |= NativeWindowMethods.SWP_NOZORDER;
+            aboveTarget = IntPtr.Zero;
+        }
+        NativeWindowMethods.SetWindowPos(
+            _overlayHandle,
+            aboveTarget == IntPtr.Zero ? NativeWindowMethods.HWND_TOP : aboveTarget,
+            bounds.Left,
+            bounds.Top,
+            bounds.Width,
+            bounds.Height,
+            flags);
+    }
+'@
+    if (-not $overlayCode.Contains($oldPosition)) { throw 'V10 overlay Position method anchor missing.' }
+    $newPosition = @'
+    private void Position(NativeWindowMethods.RECT bounds)
+    {
+        if (_overlayHandle == IntPtr.Zero) _overlayHandle = new WindowInteropHelper(this).Handle;
+        if (_overlayHandle == IntPtr.Zero) return;
+
+        var source = HwndSource.FromHwnd(_overlayHandle);
+        var transform = source?.CompositionTarget?.TransformFromDevice;
+        if (transform is not null)
+        {
+            var topLeft = transform.Value.Transform(new Point(bounds.Left, bounds.Top));
+            var bottomRight = transform.Value.Transform(new Point(bounds.Right, bounds.Bottom));
+            Left = topLeft.X;
+            Top = topLeft.Y;
+            Width = Math.Max(1d, bottomRight.X - topLeft.X);
+            Height = Math.Max(1d, bottomRight.Y - topLeft.Y);
+        }
+
+        var aboveTarget = NativeWindowMethods.GetWindow(_targetWindow, NativeWindowMethods.GW_HWNDPREV);
+        var flags = NativeWindowMethods.SWP_NOACTIVATE | NativeWindowMethods.SWP_SHOWWINDOW;
+        if (aboveTarget == _overlayHandle)
+        {
+            flags |= NativeWindowMethods.SWP_NOZORDER;
+            aboveTarget = IntPtr.Zero;
+        }
+        NativeWindowMethods.SetWindowPos(
+            _overlayHandle,
+            aboveTarget == IntPtr.Zero ? NativeWindowMethods.HWND_TOP : aboveTarget,
+            bounds.Left,
+            bounds.Top,
+            bounds.Width,
+            bounds.Height,
+            flags);
+    }
+'@
+    $overlayCode = $overlayCode.Replace($oldPosition, $newPosition)
+    Set-Content -Path $overlayCodePath -Value $overlayCode -Encoding utf8
+}
+
 $agent = Join-Path $Root 'src/DKLock.App/Protection/ApplicationWindowProtectionAgent.cs'
 if (-not (Test-Path $agent)) { throw "Missing V10 protection agent: $agent" }
 $agentText = Get-Content $agent -Raw
