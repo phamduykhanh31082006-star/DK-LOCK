@@ -39,6 +39,11 @@ function Get-Rect([IntPtr]$Hwnd) {
 }
 '@
 $guiText = [regex]::Replace($guiText, $getRectPattern, $getRectReplacement.TrimEnd(), 1)
+
+$geometryLine = '$sizeDelta = [Math]::Abs(($targetRect.Right-$targetRect.Left) - ($overlayRect.Right-$overlayRect.Left)) + [Math]::Abs(($targetRect.Bottom-$targetRect.Top) - ($overlayRect.Bottom-$overlayRect.Top))'
+if (-not $guiText.Contains($geometryLine)) { throw 'V10 GUI geometry diagnostic anchor missing.' }
+$geometryDiag = '$geometry = "GEOMETRY target=[$($targetRect.Left),$($targetRect.Top),$($targetRect.Right),$($targetRect.Bottom)] overlay=[$($overlayRect.Left),$($overlayRect.Top),$($overlayRect.Right),$($overlayRect.Bottom)] positionDelta=$positionDelta sizeDelta=$sizeDelta"' + "`r`n" + '    Write-Host $geometry' + "`r`n" + '    $lines.Add($geometry)'
+$guiText = $guiText.Replace($geometryLine, $geometryLine + "`r`n    " + $geometryDiag)
 Set-Content $guiTarget -Value $guiText -Encoding utf8
 
 # E2E-only agent trace. It is inert unless DKLOCK_V10_AGENT_TRACE is set.
