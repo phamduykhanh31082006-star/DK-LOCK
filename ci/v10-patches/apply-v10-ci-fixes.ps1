@@ -76,7 +76,6 @@ if ($overlayCode -notmatch 'TransformFromDevice') {
             flags);
     }
 '@
-    if (-not $overlayCode.Contains($oldPosition)) { throw 'V10 overlay Position method anchor missing.' }
     $newPosition = @'
     private void Position(NativeWindowMethods.RECT bounds)
     {
@@ -112,7 +111,9 @@ if ($overlayCode -notmatch 'TransformFromDevice') {
             flags);
     }
 '@
-    $overlayCode = $overlayCode.Replace($oldPosition, $newPosition)
+    $positionPattern = '(?s)    private void Position\(NativeWindowMethods\.RECT bounds\)\s*\{.*?\n    \}\s*(?=\n    private async void UnlockButton_Click)'
+    if ($overlayCode -notmatch $positionPattern) { throw 'V10 overlay Position method anchor missing.' }
+    $overlayCode = [regex]::Replace($overlayCode, $positionPattern, $newPosition.TrimEnd(), 1)
     Set-Content -Path $overlayCodePath -Value $overlayCode -Encoding utf8
 }
 
