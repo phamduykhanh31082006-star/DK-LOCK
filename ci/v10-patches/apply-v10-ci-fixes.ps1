@@ -133,7 +133,12 @@ if ($overlayCode -notmatch 'TransformFromDevice') {
 # which was shrinking the borderless overlay back to its content height.
 # Complete layout first, then position again at Render priority using fresh DWM bounds.
 $overlayCode = Get-Content $overlayCodePath -Raw
-if ($overlayCode -notmatch '(?m)^using System\.Windows\.Media;\s*
+if ($overlayCode -notmatch '(?m)^using System\.Windows\.Media;\s*$') {
+    $overlayCode = $overlayCode.Replace('using System.Windows.Interop;', "using System.Windows.Interop;`r`nusing System.Windows.Media;")
+    Set-Content -Path $overlayCodePath -Value $overlayCode -Encoding utf8
+}
+$overlayCode = Get-Content $overlayCodePath -Raw
+if ($overlayCode -notmatch 'DispatcherPriority\.Render') {
     if ($overlayCode -notmatch '(?m)^using System\.Windows\.Threading;\s*$') {
         $overlayCode = $overlayCode.Replace('using System.Windows.Interop;', "using System.Windows.Interop;`r`nusing System.Windows.Threading;")
     }
@@ -177,7 +182,6 @@ if ($overlayCode -notmatch '(?m)^using System\.Windows\.Media;\s*
     $overlayCode = [regex]::Replace($overlayCode, $showPattern, $showReplacement.TrimEnd(), 1)
     Set-Content -Path $overlayCodePath -Value $overlayCode -Encoding utf8
 }
-
 $agent = Join-Path $Root 'src/DKLock.App/Protection/ApplicationWindowProtectionAgent.cs'
 if (-not (Test-Path $agent)) { throw "Missing V10 protection agent: $agent" }
 $agentText = Get-Content $agent -Raw
